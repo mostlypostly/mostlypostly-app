@@ -491,6 +491,11 @@ io.on("connection", (s) => {
   s.on("disconnect", () => console.log("🔴 Dashboard disconnected:", s.id));
 });
 
+// Simple home route for Render root URL
+app.get("/", (req, res) => {
+  res.send("✅ MostlyPostly is running! Use /dashboard or /status to check system health.");
+});
+
 // ======================================================
 // 🚀 Start
 // ======================================================
