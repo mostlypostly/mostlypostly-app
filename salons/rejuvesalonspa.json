@@ -1,0 +1,94 @@
+{
+  "salon_id": "rejuve-salon-spa",
+  "salon_info": {
+    "name": "Rejuve Salon Spa",
+    "city": "Carmel, IN",
+    "booking_url": "https://booking.rejuvesalonandspa.com/webstoreNew/services?utm_source=rejuvesalonandspa.com&utm_medium=website&utm_campaign=newToRejuve_page",
+    "facebook_page_id": "118354306723",
+    "instagram_handle": "rejuvesalonspa",
+    "x_handle": "rejuvesalonspa",
+    "tiktok_handle": "rejuvesalonspa",
+    "preferred_brand_1": "Aveda",
+    "preferred_brand_2": "",
+    "default_hashtags": [
+      "#RejuveSalonSpa",
+      "#CarmelIndiana"
+    ],
+    "tone_profile": "friendly",
+    "auto_publish": true,
+    "compliance": {
+      "stylist_sms_consent_required": true
+    }
+  },
+  "settings": {
+    "require_manager_approval": false,
+    "auto_post_if_no_response_hours": 24,
+    "notify_stylist_on_approval": true,
+    "notify_stylist_on_denial": true
+  },
+  "managers": [
+    {
+      "id": "manager-troy",
+      "name": "Troy",
+      "role": "manager",
+      "chat_id": 8483384005,
+      "phone": "+13179385492",
+      "instagram_handle": "irontman72",
+      "salon_name": "Rejuve Salon Spa",
+      "city": "Carmel, IN",
+      "specialties": [
+        "balayage",
+        "mens_grooming"
+      ],
+      "consent": {
+        "sms_opt_in": false,
+        "timestamp": ""
+      },
+      "compliance_opt_in": false,
+      "compliance_timestamp": ""
+    }
+  ],
+  "stylists": [
+    {
+      "id": "stylist-nicole-hardister",
+      "name": "Nicole Hardister",
+      "role": "stylist",
+      "chat_id": 8246265288,
+      "phone": "+13176401450",
+      "instagram_handle": "nicolehardister",
+      "facebook_handle": "",
+      "salon_name": "Rejuve Salon Spa",
+      "city": "Carmel, IN",
+      "specialties": [
+        "balayage",
+        "mens_grooming"
+      ],
+      "consent": {
+        "sms_opt_in": false,
+        "timestamp": ""
+      },
+      "compliance_opt_in": false,
+      "compliance_timestamp": ""
+    },
+    {
+      "id": "stylist-braylinn",
+      "name": "Braylinn",
+      "role": "stylist",
+      "chat_id": 4632067474,
+      "phone": "4632067474",
+      "instagram_handle": "hardisterbraylinn",
+      "facebook_handle": "",
+      "salon_name": "Rejuve Salon Spa",
+      "city": "Carmel, IN",
+      "specialties": [
+        "vivid"
+      ],
+      "consent": {
+        "sms_opt_in": false,
+        "timestamp": null
+      },
+      "compliance_opt_in": false,
+      "compliance_timestamp": null
+    }
+  ]
+}

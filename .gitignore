@@ -1,0 +1,8 @@
+# Ignore local environment and sensitive files
+.env
+logs/
+*.log
+postly.db
+node_modules/
+public/uploads/
+.DS_Store

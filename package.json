@@ -1,0 +1,45 @@
+{
+  "name": "postly-prototype",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Postly prototype — salon AI assistant that generates captions from MMS photos via Twilio + OpenAI.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "guard:hashtags": "node scripts/guard-no-hardcoded-hashtags.js",
+    "check:salons": "node scripts/check-salon-defaults.js",
+    "validate:salons": "node scripts/validate-salons.js",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "postly",
+    "salon",
+    "ai",
+    "twilio",
+    "openai",
+    "mms",
+    "social-media"
+  ],
+  "author": "Troy Hardister",
+  "license": "ISC",
+  "dependencies": {
+    "body-parser": "^1.20.2",
+    "chokidar": "^4.0.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "node-fetch": "^3.3.2",
+    "socket.io": "^4.8.1",
+    "sqlite3": "^5.1.7",
+    "twilio": "^5.10.2"
+  },
+  "devDependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "nodemon": "^3.1.10",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
