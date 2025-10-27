@@ -1,0 +1,75 @@
+{
+  "$id": "https://mostlypostly/schema/salon.v0.5.4.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MostlyPostly Salon Schema v0.5.4 (relaxed)",
+  "type": "object",
+
+  "required": ["salon_id", "salon_info"],
+
+  "properties": {
+    "salon_id": { "type": "string", "minLength": 1 },
+
+    "salon_info": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+
+        "instagram_handle": { "type": "string" },
+        "booking_url": { "type": "string", "format": "uri" },
+
+        "default_hashtags": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^#\\S+$" },
+          "uniqueItems": true
+        },
+
+        "tone_profile": {
+          "type": "string",
+          "enum": ["default", "luxury", "friendly", "trendy"],
+          "default": "default"
+        },
+
+        "auto_publish": { "type": "boolean", "default": false },
+
+        "compliance": {
+          "type": "object",
+          "properties": {
+            "stylist_sms_consent_required": { "type": "boolean", "default": true }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+
+    "stylists": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "instagram_handle": { "type": "string" },
+          "specialties": {
+            "type": "array",
+            "items": { "type": "string" },
+            "uniqueItems": true
+          },
+          "consent": {
+            "type": "object",
+            "properties": {
+              "sms_opt_in": { "type": "boolean" },
+              "timestamp": { "type": ["string","null"], "format": "date-time" }
+            },
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+
+  "additionalProperties": true
+}

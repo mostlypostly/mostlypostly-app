@@ -1,0 +1,93 @@
+{
+  "version": "1.0",
+  "timezone": "America/Indiana/Indianapolis",
+  "posting_window": { "start": "09:00", "end": "19:00" },
+  "story_window": { "start": "08:00", "end": "21:00" },
+  "min_spacing_minutes": 90,
+  "random_delay_minutes": { "min": 1, "max": 2 },
+  "daily_caps": {
+    "instagram_feed": 2,
+    "instagram_reels": 2,
+    "instagram_stories": 8,
+    "facebook_feed": 2,
+    "tiktok": 3,
+    "google_business_profile": 1
+  },
+  "content_types": {
+    "stylist_portfolio": {
+      "description": "Finished looks, color transformations, before/after photos.",
+      "target_per_week": { "instagram_feed": 4, "facebook_feed": 3, "google_business_profile": 1 },
+      "preferred_formats": ["carousel", "single_image"],
+      "priority": 80,
+      "avoid_back_to_back_with": ["promotion", "retail_spotlight"]
+    },
+    "open_availability": {
+      "description": "Last-minute openings or available times for stylists.",
+      "target_per_week": { "instagram_stories": 5, "facebook_feed": 2 },
+      "preferred_formats": ["story_sequence", "single_image"],
+      "priority": 95,
+      "time_constraints": { "same_day_only": true, "latest_publish": "16:00" }
+    },
+    "retail_spotlight": {
+      "description": "Showcase of retail products with an educational or lifestyle tip.",
+      "target_per_week": { "instagram_feed": 1, "facebook_feed": 1 },
+      "preferred_formats": ["carousel", "reel"],
+      "priority": 60,
+      "rules": { "embed_tip": true }
+    },
+    "promotion": {
+      "description": "Limited-time offers, seasonal promotions, or events.",
+      "target_per_week": { "instagram_feed": 1, "facebook_feed": 1, "instagram_stories": 4, "google_business_profile": 1 },
+      "preferred_formats": ["feed_post", "story_sequence", "offer_post"],
+      "priority": 90,
+      "pin_allowed": true
+    },
+    "short_form_video": {
+      "description": "Reels, TikToks, and other vertical short videos.",
+      "aliases": ["reel", "tiktok"],
+      "target_per_week": { "instagram_reels": 4, "tiktok": 4 },
+      "preferred_formats": ["reel_9x16", "tiktok_9x16"],
+      "priority": 85,
+      "duration_seconds_max": 90
+    },
+    "culture_bts_testimonial": {
+      "description": "Team highlights, salon culture, testimonials, or community posts.",
+      "target_per_week": { "instagram_feed": 2, "facebook_feed": 2, "instagram_stories": 3 },
+      "preferred_formats": ["single_image", "carousel", "reel"],
+      "priority": 55
+    }
+  },
+  "platform_defaults": {
+    "instagram": {
+      "caption_style": "Book via link in bio.",
+      "hashtags_min": 8,
+      "hashtags_max": 15,
+      "reels_autopost_to_feed": true
+    },
+    "facebook": {
+      "include_booking_url": true
+    },
+    "google_business_profile": {
+      "post_type_priority": ["OFFER", "WHAT_NEW"],
+      "expires_after_days": 7
+    },
+    "tiktok": {
+      "caption_max_chars": 2200,
+      "use_music_trends": true
+    }
+  },
+  "conflicts": {
+    "no_two_salesy_in_row": true,
+    "separate_reel_and_feed_minutes": 120,
+    "mirror_to_facebook_with_delay_minutes": 60
+  },
+  "analytics_feedback": {
+    "increase_frequency_if": { "metric": "7d_engagement_rate", "gt": 0.05, "delta": 1 },
+    "decrease_frequency_if": { "metric": "7d_unfollows", "gt": 0.01, "delta": -1 }
+  },
+  "auto_backfill": {
+    "enable": true,
+    "trigger_if_no_post_by_hour": 15,
+    "fallback_types": ["stylist_portfolio", "culture_bts_testimonial"]
+  }
+}
