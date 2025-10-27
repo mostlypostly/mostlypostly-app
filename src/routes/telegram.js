@@ -6,6 +6,8 @@ import { handleIncomingMessage } from "../core/messageRouter.js";
 import { moderateAIOutput } from "../utils/moderation.js";
 import { savePost } from "../core/storage.js";
 import { createLogger } from "../utils/logHelper.js";
+import { saveStylistConsent } from "../core/storage.js";
+
 
 const log = createLogger("app"); // or "scheduler", "moderation", etc.
 
@@ -76,13 +78,32 @@ export default function telegramRoute(drafts, lookupStylist, safeGenerateCaption
   // -----------------------------------------
   // 🔔 Main Telegram webhook
   // -----------------------------------------
-  router.post("/", async (req, res) => {
+  router.post("/webhook", async (req, res) => {
     try {
       console.log("🔔 Telegram webhook hit!");
       const body = req.body;
       const message = body.message || body.edited_message || {};
       const chatId = message.chat?.id;
       const text = (message.caption || message.text || "").trim();
+
+      // ✅ Handle consent reply
+      if (text.toUpperCase() === "AGREE") {
+  console.log(`🧾 Consent reply detected from ${chatId}`);
+
+  const timestamp = new Date().toISOString();
+  const payload = {
+    compliance_opt_in: true,
+    compliance_timestamp: timestamp,
+    consent: { sms_opt_in: true, timestamp }
+  };
+
+  const result = saveStylistConsent(chatId, payload);
+  console.log("💾 Consent persistence result:", result);
+
+  await sendText(chatId, "✅ Thanks! You’re now opted-in to MostlyPostly updates.");
+  return res.sendStatus(200);
+      }
+
       const photo = message.photo;
       const fromId = message.from?.id;
       const isFromBot = message.from?.is_bot;
