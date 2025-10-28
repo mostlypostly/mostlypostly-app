@@ -99,22 +99,30 @@ if (text.toUpperCase() === "AGREE") {
 
   try {
     // 🔍 Resolve stylist record (may return undefined if not joined yet)
+    // ✅ Try to resolve stylist OR manager
     const stylist = lookupStylist(chatId);
-    const stylistKey = stylist?.phone;
+    const manager = lookupManager?.(chatId); // if your lookup supports managers
+    const profile = stylist || manager;
+    const profileKey = profile?.phone;
 
-    if (!stylistKey) {
-      console.warn(
-        `⚠️ Consent attempt from ${chatId} failed — stylist not found.`
-      );
-      await sendText(
-        chatId,
+    if (!profileKey) {
+      console.warn(`⚠️ Consent attempt from ${chatId} failed — user not found.`);
+     await sendText(
+       chatId,
         "⚠️ We couldn’t find your profile. Please ask your manager to add you using the JOIN command before agreeing."
       );
-      return res.sendStatus(200);
+        return res.sendStatus(200);
     }
 
+// 💾 Persist consent for stylist or manager
+const result = saveStylistConsent(profileKey, payload);
+console.log("💾 Consent persistence result:", result);
+
+await sendText(chatId, "✅ Thanks! You’re now opted-in to MostlyPostly updates.");
+return res.sendStatus(200);
+
+
     // 💾 Persist consent for the known stylist
-    const result = saveStylistConsent(stylistKey, payload);
     console.log("💾 Consent persistence result:", result);
 
     await sendText(
