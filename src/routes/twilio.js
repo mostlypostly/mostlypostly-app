@@ -1,13 +1,14 @@
 // src/routes/twilio.js — unified message router integration for SMS/MMS
 import express from "express";
 import bodyParser from "body-parser";
-import twilio from "twilio";
-const { MessagingResponse } = twilio;
 import { handleIncomingMessage } from "../core/messageRouter.js";
 import { publishToFacebook } from "../publishers/facebook.js";
 import { moderateAIOutput } from "../utils/moderation.js";
 import { savePost } from "../../db.js";
 import { createLogger } from "../utils/logHelper.js";
+import twilio from "twilio";
+const { MessagingResponse } = twilio;
+
 
 const log = createLogger("app"); // or "scheduler", "moderation", etc.
 
