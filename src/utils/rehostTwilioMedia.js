@@ -10,6 +10,8 @@ export async function rehostTwilioMedia(twilioUrl) {
     // already public
     return twilioUrl;
   }
+  console.log("🔐 TWILIO_ACCOUNT_SID exists?", !!process.env.TWILIO_ACCOUNT_SID);
+  console.log("🔐 TWILIO_AUTH_TOKEN exists?", !!process.env.TWILIO_AUTH_TOKEN);
 
   console.log("🌐 Rehosting Twilio media:", twilioUrl);
   const res = await fetch(twilioUrl, {
@@ -32,3 +34,4 @@ export async function rehostTwilioMedia(twilioUrl) {
   console.log("✅ Twilio media rehosted:", publicUrl);
   return publicUrl;
 }
+
