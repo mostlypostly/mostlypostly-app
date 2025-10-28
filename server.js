@@ -31,6 +31,25 @@ import { classifyPost } from "./src/core/postClassifier.js";
 import { enqueuePost, startScheduler } from "./src/scheduler.js";
 import analyticsSchedulerRoute from "./src/routes/analyticsScheduler.js";
 
+import path from "path";
+import express from "express";
+import { fileURLToPath } from "url";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// ✅ Serve /public/uploads as a truly public static directory
+app.use(
+  "/uploads",
+  express.static(path.join(__dirname, "public/uploads"), {
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith(".jpg") || filePath.endsWith(".jpeg")) {
+        res.setHeader("Content-Type", "image/jpeg");
+      }
+      res.setHeader("Cache-Control", "public, max-age=86400");
+    },
+  })
+);
+
 
 enqueuePost({
   salon_id: "rejuve",
