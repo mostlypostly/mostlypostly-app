@@ -172,6 +172,24 @@ export function lookupStylist(identifier) {
   return null;
 }
 
+export function lookupManager(identifier) {
+  const idStr = String(identifier).trim();
+
+  for (const [salonId, salon] of Object.entries(salons)) {
+    for (const [key, manager] of Object.entries(salon.managers || {})) {
+      const chat = String(manager.chat_id || "").trim();
+      const phone = String(manager.phone || "").trim();
+      const id = String(manager.id || "").trim();
+
+      if (chat === idStr || phone === idStr || id === idStr) {
+        return { ...manager, phone, salonId };
+      }
+    }
+  }
+
+  return null;
+}
+
 export function getSalonByStylist(identifier) {
   if (!cachedSalons.length) return null;
   const idStr = String(identifier).trim();

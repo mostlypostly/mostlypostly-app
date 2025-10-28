@@ -7,6 +7,8 @@ import { moderateAIOutput } from "../utils/moderation.js";
 import { savePost } from "../core/storage.js";
 import { createLogger } from "../utils/logHelper.js";
 import { saveStylistConsent } from "../core/storage.js";
+import { lookupStylist, lookupManager } from "../core/salonLookup.js";
+
 
 
 const log = createLogger("app"); // or "scheduler", "moderation", etc.
