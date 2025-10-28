@@ -31,8 +31,6 @@ import { classifyPost } from "./src/core/postClassifier.js";
 import { enqueuePost, startScheduler } from "./src/scheduler.js";
 import analyticsSchedulerRoute from "./src/routes/analyticsScheduler.js";
 
-import path from "path";
-import express from "express";
 import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
