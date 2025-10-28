@@ -117,6 +117,8 @@ if (text.toUpperCase() === "AGREE") {
     const result = saveStylistConsent(profileKey, payload);
     console.log("💾 Consent persistence result:", result);
 
+    await loadSalons(); // refresh cachedSalons so router sees new consent
+
     await sendText(chatId, "✅ Thanks! You’re now opted-in to MostlyPostly updates.");
     // ✅ STOP execution here so it doesn't fall through to handleIncomingMessage()
     return res.sendStatus(200);
