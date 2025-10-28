@@ -34,4 +34,3 @@ export async function rehostTwilioMedia(twilioUrl) {
   console.log("✅ Twilio media rehosted:", publicUrl);
   return publicUrl;
 }
-
