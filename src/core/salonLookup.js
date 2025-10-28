@@ -127,12 +127,13 @@ export function lookupStylist(identifier) {
     const managers = salon.managers || [];
 
     // --- Try stylist match
-    const stylist = stylists.find(
-      (s) =>
-        String(s.chat_id).trim() === idStr ||
-        String(s.phone).trim() === idStr ||
-        s.id === idStr
-    );
+    const stylist = stylists.find((s) => {
+      const chat = String(s.chat_id || "").trim();
+      const phone = String(s.phone || "").trim();
+      const id = String(s.id || "").trim();
+      return chat === idStr || phone === idStr || id === idStr;
+    });
+
     if (stylist) {
       return {
         ...stylist,
@@ -147,12 +148,13 @@ export function lookupStylist(identifier) {
     }
 
     // --- Try manager match
-    const manager = managers.find(
-      (m) =>
-        String(m.chat_id).trim() === idStr ||
-        String(m.phone).trim() === idStr ||
-        m.id === idStr
-    );
+    const manager = managers.find((m) => {
+      const chat = String(m.chat_id || "").trim();
+      const phone = String(m.phone || "").trim();
+      const id = String(m.id || "").trim();
+      return chat === idStr || phone === idStr || id === idStr;
+    });
+
     if (manager) {
       return {
         ...manager,
