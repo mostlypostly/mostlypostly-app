@@ -432,6 +432,15 @@ export async function handleIncomingMessage({
       role: "stylist"
     };
 
+    // Also try manager lookup (used for consent handling)
+const manager = stylist?.role === "manager" ? stylist : null;
+const hasConsent =
+  stylist?.compliance_opt_in ||
+  stylist?.consent?.sms_opt_in ||
+  manager?.compliance_opt_in ||
+  manager?.consent?.sms_opt_in;
+
+
   const role = stylist.role?.toLowerCase() || "stylist";
   console.log(`${role === "manager" ? "👔 Manager" : "💇 Stylist"} resolved: ${getStylistName(stylist)} @ ${stylist.salon_name}`);
 
@@ -747,7 +756,7 @@ Reply *APPROVE* to continue, *REGENERATE*, or *CANCEL* to start over.
 
   // NEW PHOTO — Consented?
   if (imageUrl) {
-    if (!hasConsent(stylist) && consentSessions.get(chatId)?.status !== "granted") {
+    if (!hasConsent && consentSessions.get(chatId)?.status !== "granted") {
       await queueConsentAndPrompt(chatId, imageUrl, text, sendMessage, stylist);
       endTimer(start);
       return;
@@ -769,7 +778,7 @@ Reply *APPROVE* to continue, *REGENERATE*, or *CANCEL* to start over.
   }
 
   // Default
-  if (!hasConsent(stylist) && consentSessions.get(chatId)?.status !== "granted") {
+  if (!hasConsent && consentSessions.get(chatId)?.status !== "granted") {
     await queueConsentAndPrompt(chatId, null, null, sendMessage, stylist);
     endTimer(start);
     return;
