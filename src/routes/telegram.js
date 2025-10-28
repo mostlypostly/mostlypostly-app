@@ -100,49 +100,35 @@ if (text.toUpperCase() === "AGREE") {
   };
 
   try {
-    // 🔍 Resolve stylist record (may return undefined if not joined yet)
-    // ✅ Try to resolve stylist OR manager
     const stylist = lookupStylist(chatId);
-    const manager = lookupManager?.(chatId); // if your lookup supports managers
+    const manager = lookupManager?.(chatId);
     const profile = stylist || manager;
     const profileKey = profile?.phone;
 
     if (!profileKey) {
       console.warn(`⚠️ Consent attempt from ${chatId} failed — user not found.`);
-     await sendText(
-       chatId,
+      await sendText(
+        chatId,
         "⚠️ We couldn’t find your profile. Please ask your manager to add you using the JOIN command before agreeing."
       );
-        return res.sendStatus(200);
+      return res.sendStatus(200);
     }
 
-// 💾 Persist consent for stylist or manager
-const result = saveStylistConsent(profileKey, payload);
-console.log("💾 Consent persistence result:", result);
-
-await sendText(chatId, "✅ Thanks! You’re now opted-in to MostlyPostly updates.");
-return res.sendStatus(200);
-
-
-    // 💾 Persist consent for the known stylist
+    const result = saveStylistConsent(profileKey, payload);
     console.log("💾 Consent persistence result:", result);
 
-    await sendText(
-      chatId,
-      "✅ Thanks! You’re now opted-in to MostlyPostly updates."
-    );
+    await sendText(chatId, "✅ Thanks! You’re now opted-in to MostlyPostly updates.");
+    // ✅ STOP execution here so it doesn't fall through to handleIncomingMessage()
+    return res.sendStatus(200);
   } catch (err) {
     console.error("❌ Consent persistence failed:", err);
     await sendText(
       chatId,
       "⚠️ Sorry, something went wrong saving your consent. Please try again."
     );
+    return res.sendStatus(200);
   }
-
-  return res.sendStatus(200);
 }
-
-
 
       const photo = message.photo;
       const fromId = message.from?.id;
