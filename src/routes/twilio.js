@@ -94,11 +94,15 @@ export default function twilioRoute(drafts, lookupStylist, safeGenerateCaption) 
           stylist: stylist?.stylist_name,
           image,
         });
+        
+        // ✅ Delay ensures file fully written before publishing
+        await new Promise((r) => setTimeout(r, 1000));
 
         try {
           const { publishToFacebook, publishToInstagram } = await getPublishers();
 
           const [fbResult, igResult] = await Promise.allSettled([
+            
             publishToFacebook(process.env.FACEBOOK_PAGE_ID, caption, image),
             process.env.PUBLISH_TO_INSTAGRAM === "true"
               ? publishToInstagram(process.env.INSTAGRAM_USER_ID, caption, image)
