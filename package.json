@@ -31,7 +31,7 @@
     "node-fetch": "^3.3.2",
     "socket.io": "^4.8.1",
     "sqlite3": "^5.1.7",
-    "twilio": "^5.10.2"
+    "twilio": "^5.10.4"
   },
   "devDependencies": {
     "ajv": "^8.17.1",
