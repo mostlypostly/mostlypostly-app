@@ -54,73 +54,80 @@ export default function twilioRoute(drafts, lookupStylist, safeGenerateCaption) 
       }
 
       // ------------------------------------------
-      // 2️⃣ APPROVE
-      // ------------------------------------------
-      
-      if (command === "APPROVE") {
+// 2️⃣ APPROVE
+// ------------------------------------------
+if (command === "APPROVE") {
   const draft = drafts.get(from);
   if (!draft) {
     twiml.message("⚠️ No draft found. Please send a photo first.");
     return res.type("text/xml").send(twiml.toString());
   }
 
-  const caption = `${draft.caption}\n\n${(draft.hashtags || []).join(" ")}\n\n${draft.cta}`;
+  // Build caption exactly like Telegram
+  const caption = [
+    "💇‍♀️ MostlyPostly Preview (Full Post)",
+    "",
+    draft.caption,
+    "",
+    `Styled by ${stylist?.stylist_name || "a stylist"}`,
+    stylist?.instagram_handle
+      ? `IG: https://instagram.com/${stylist.instagram_handle.replace(/^@/, "")}`
+      : "",
+    "",
+    (draft.hashtags || []).join(" "),
+    "",
+    `${draft.cta}`,
+    "",
+    `Book: ${stylist?.booking_url || stylist?.salon_booking_url || ""}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
   const image = draft.image_url || imageUrl || null;
 
   console.log("📡 [Twilio] Approving post for Facebook + Instagram...", {
     salon: stylist?.salon_name,
     stylist: stylist?.stylist_name,
-    image
+    image,
   });
 
   try {
-    // ✅ Ensure image is publicly accessible before publishing
-    const { rehostTwilioMedia } = await import("../utils/rehostTwilioMedia.js");
-    const publicImageUrl = image ? await rehostTwilioMedia(image) : null;
+    // ✅ Call both publishers in parallel
+    const [fbResult, igResult] = await Promise.allSettled([
+      publishToFacebook(process.env.FACEBOOK_PAGE_ID, caption, image),
+      process.env.PUBLISH_TO_INSTAGRAM === "true"
+        ? (await import("../publishers/instagram.js")).publishToInstagram(
+            process.env.INSTAGRAM_USER_ID,
+            caption,
+            image
+          )
+        : Promise.resolve({ status: "skipped" }),
+    ]);
 
-    // 🔵 Publish to Facebook
-    const fbResult = await publishToFacebook(
-      process.env.FACEBOOK_PAGE_ID,
-      caption,
-      publicImageUrl
-    );
+    // 🧾 Results summary
+    const fbSuccess = fbResult.status === "fulfilled";
+    const igSuccess = igResult.status === "fulfilled";
 
-    const fbLink = fbResult?.post_id
-      ? `https://facebook.com/${fbResult.post_id.replace("_", "/posts/")}`
-      : "✅ Facebook post created.";
-
-    // 🟣 Publish to Instagram
-    const igResult = await publishToInstagram({
-      imageUrl: publicImageUrl,
-      caption,
-      postId: fbResult?.id || Date.now().toString(),
-    });
-
-    console.log("✅ [Facebook] Post created:", fbResult?.post_id);
-    console.log("✅ [Instagram] Post created:", igResult?.media_id);
-
-    // 💾 Save post to DB for dashboard
+    // Save post to dashboard
     await savePost(from, stylist, caption, caption, caption);
 
-    // ✅ Notify stylist
-    twiml.message(
-      `✅ Approved and posted!\n\n${draft.caption}\n\n${(draft.hashtags || []).join(
-        " "
-      )}\n\n${draft.cta}\n\n📍 ${fbLink}\n\n💾 Also posted to Instagram.\n\nBook link: ${
-        stylist.booking_url ||
-        "https://booking.rejuvesalonandspa.com/webstoreNew/services?utmsource=rejuvesalonandspa.com&utmmedium=website&utm_campaign=newToRejuvepage"
-      }`
-    );
+    let reply = "✅ Approved and posted!\n\n";
+    if (fbSuccess)
+      reply += `📘 Facebook: https://facebook.com/${fbResult.value.post_id.replace("_", "/posts/")}\n`;
+    if (igSuccess) reply += "📸 Instagram: Posted successfully!\n";
+    if (!fbSuccess && !igSuccess)
+      reply += "⚠️ Posting failed on both platforms. Check logs.";
+
+    twiml.message(reply.trim());
     drafts.delete(from);
   } catch (err) {
     console.error("🚫 [Twilio] Publish failed:", err);
-    twiml.message(
-      "⚠️ Approved but failed to post to Facebook or Instagram. Check logs for details."
-    );
+    twiml.message("⚠️ Approved but failed to post to social platforms. Check logs for details.");
   }
 
   return res.type("text/xml").send(twiml.toString());
-      }
+}
+
 
       // ------------------------------------------
       // 3️⃣ REGENERATE
