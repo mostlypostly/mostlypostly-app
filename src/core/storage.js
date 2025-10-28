@@ -325,52 +325,91 @@ export function saveStylistConsent(chatIdOrPhone, payload = {}) {
       continue;
     }
 
+    // --- 1️⃣ Try stylist match first
     const found = findStylistInJson(json, key);
-    if (!found) continue;
+    if (found) {
+      const { stylist, stylistKeyOrIndex, form } = found;
 
-    const { stylist, stylistKeyOrIndex, form } = found;
-
-    // Merge payload onto stylist object
-    const merged = {
-      ...stylist,
-      compliance_opt_in:
-        typeof payload.compliance_opt_in === "boolean"
-          ? payload.compliance_opt_in
-          : stylist.compliance_opt_in || false,
-      compliance_timestamp:
-        payload.compliance_timestamp || stylist.compliance_timestamp || "",
-      consent: {
-        ...(stylist.consent || {}),
-        ...(payload.consent || {}),
-      },
-    };
-
-    // Write back depending on form
-    if (form === "map") {
-      json.stylists[stylistKeyOrIndex] = merged;
-    } else {
-      json.stylists[stylistKeyOrIndex] = merged;
-    }
-
-    try {
-      fs.writeFileSync(filePath, JSON.stringify(json, null, 2), "utf8");
-      console.log(
-        `💾 Consent saved for stylist "${merged.stylist_name || merged.name || merged.id || "Unknown"}" in ${path.basename(filePath)}`
-      );
-      return {
-        ok: true,
-        file: filePath,
-        stylist_name: merged.stylist_name || merged.name || "",
-        updated: {
-          compliance_opt_in: merged.compliance_opt_in,
-          compliance_timestamp: merged.compliance_timestamp,
-          consent: merged.consent,
+      const merged = {
+        ...stylist,
+        compliance_opt_in:
+          typeof payload.compliance_opt_in === "boolean"
+            ? payload.compliance_opt_in
+            : stylist.compliance_opt_in || false,
+        compliance_timestamp:
+          payload.compliance_timestamp || stylist.compliance_timestamp || "",
+        consent: {
+          ...(stylist.consent || {}),
+          ...(payload.consent || {}),
         },
       };
-    } catch (e) {
-      return { ok: false, error: `Failed to write ${filePath}: ${e.message}` };
+
+      if (form === "map") {
+        json.stylists[stylistKeyOrIndex] = merged;
+      } else {
+        json.stylists[stylistKeyOrIndex] = merged;
+      }
+
+      try {
+        fs.writeFileSync(filePath, JSON.stringify(json, null, 2), "utf8");
+        console.log(
+          `💾 Consent saved for stylist "${merged.stylist_name || merged.name || merged.id || "Unknown"}" in ${path.basename(filePath)}`
+        );
+        return {
+          ok: true,
+          file: filePath,
+          stylist_name: merged.stylist_name || merged.name || "",
+          updated: {
+            compliance_opt_in: merged.compliance_opt_in,
+            compliance_timestamp: merged.compliance_timestamp,
+            consent: merged.consent,
+          },
+        };
+      } catch (e) {
+        return { ok: false, error: `Failed to write ${filePath}: ${e.message}` };
+      }
+    }
+
+    // --- 2️⃣ Try manager match (new)
+    const managers = json.managers || [];
+    const manager = managers.find(
+      (m) =>
+        String(m.chat_id || "").trim() === key ||
+        String(m.phone || "").trim() === key
+    );
+    if (manager) {
+      manager.compliance_opt_in =
+        typeof payload.compliance_opt_in === "boolean"
+          ? payload.compliance_opt_in
+          : manager.compliance_opt_in || false;
+      manager.compliance_timestamp =
+        payload.compliance_timestamp || manager.compliance_timestamp || "";
+      manager.consent = {
+        ...(manager.consent || {}),
+        ...(payload.consent || {}),
+      };
+
+      try {
+        fs.writeFileSync(filePath, JSON.stringify(json, null, 2), "utf8");
+        console.log(
+          `💾 Consent saved for manager "${manager.name || manager.id || "Unknown"}" in ${path.basename(filePath)}`
+        );
+        return {
+          ok: true,
+          file: filePath,
+          stylist_name: manager.name || "",
+          updated: {
+            compliance_opt_in: manager.compliance_opt_in,
+            compliance_timestamp: manager.compliance_timestamp,
+            consent: manager.consent,
+          },
+        };
+      } catch (e) {
+        return { ok: false, error: `Failed to write ${filePath}: ${e.message}` };
+      }
     }
   }
 
+  // --- 3️⃣ If no stylist or manager match found
   return { ok: false, error: "Stylist not found in salons/*.json" };
 }
