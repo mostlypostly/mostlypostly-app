@@ -86,8 +86,8 @@ export default function telegramRoute(drafts, lookupStylist, safeGenerateCaption
       const chatId = message.chat?.id;
       const text = (message.caption || message.text || "").trim();
 
-      // ✅ Handle consent reply
-      if (text.toUpperCase() === "AGREE") {
+              // ✅ Handle consent reply
+if (text.toUpperCase() === "AGREE") {
   console.log(`🧾 Consent reply detected from ${chatId}`);
 
   const timestamp = new Date().toISOString();
@@ -97,12 +97,42 @@ export default function telegramRoute(drafts, lookupStylist, safeGenerateCaption
     consent: { sms_opt_in: true, timestamp }
   };
 
-  const result = saveStylistConsent(chatId, payload);
-  console.log("💾 Consent persistence result:", result);
+  try {
+    // 🔍 Resolve stylist record (may return undefined if not joined yet)
+    const stylist = lookupStylist(chatId);
+    const stylistKey = stylist?.phone;
 
-  await sendText(chatId, "✅ Thanks! You’re now opted-in to MostlyPostly updates.");
+    if (!stylistKey) {
+      console.warn(
+        `⚠️ Consent attempt from ${chatId} failed — stylist not found.`
+      );
+      await sendText(
+        chatId,
+        "⚠️ We couldn’t find your profile. Please ask your manager to add you using the JOIN command before agreeing."
+      );
+      return res.sendStatus(200);
+    }
+
+    // 💾 Persist consent for the known stylist
+    const result = saveStylistConsent(stylistKey, payload);
+    console.log("💾 Consent persistence result:", result);
+
+    await sendText(
+      chatId,
+      "✅ Thanks! You’re now opted-in to MostlyPostly updates."
+    );
+  } catch (err) {
+    console.error("❌ Consent persistence failed:", err);
+    await sendText(
+      chatId,
+      "⚠️ Sorry, something went wrong saving your consent. Please try again."
+    );
+  }
+
   return res.sendStatus(200);
-      }
+}
+
+
 
       const photo = message.photo;
       const fromId = message.from?.id;
