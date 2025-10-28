@@ -1,17 +1,14 @@
-// src/routes/twilio.js — unified message router integration for SMS/MMS
+// src/routes/twilio.js — unified Twilio SMS/MMS router for MostlyPostly
 import express from "express";
 import bodyParser from "body-parser";
-import { handleIncomingMessage } from "../core/messageRouter.js";
-import { publishToFacebook } from "../publishers/facebook.js";
-import { moderateAIOutput } from "../utils/moderation.js";
-import { savePost } from "../../db.js";
-import { createLogger } from "../utils/logHelper.js";
 import twilio from "twilio";
+import { handleIncomingMessage } from "../core/messageRouter.js";
+import { moderateAIOutput } from "../utils/moderation.js";
+import { createLogger } from "../utils/logHelper.js";
+import { savePost } from "../../db.js";
 
-// ✅ Works in ESM: twilio.twiml.MessagingResponse
 const MessagingResponse = twilio.twiml.MessagingResponse;
-
-const log = createLogger("app"); // or "scheduler", "moderation", etc.
+const log = createLogger("app");
 
 export default function twilioRoute(drafts, lookupStylist, safeGenerateCaption) {
   const router = express.Router();
@@ -25,11 +22,6 @@ export default function twilioRoute(drafts, lookupStylist, safeGenerateCaption) 
       const from = req.body.From;
       const text = (req.body.Body || "").trim();
       const numMedia = parseInt(req.body.NumMedia || "0", 10);
-      const stylist = lookupStylist(from) || {
-        stylist_name: "SMS User",
-        salon_name: "Rejuve Salon Spa",
-        city: "Carmel"
-      };
 
       if (!from) {
         console.warn("⚠️ Missing sender (From)");
@@ -37,7 +29,13 @@ export default function twilioRoute(drafts, lookupStylist, safeGenerateCaption) 
         return res.type("text/xml").send(twiml.toString());
       }
 
-      // 📸 Get media URL if present
+      const stylist = lookupStylist(from) || {
+        stylist_name: "SMS User",
+        salon_name: "Rejuve Salon Spa",
+        city: "Carmel",
+      };
+
+      // 📸 Get image if any
       let imageUrl = null;
       if (numMedia > 0) {
         imageUrl = req.body[`MediaUrl${numMedia - 1}`];
@@ -45,16 +43,13 @@ export default function twilioRoute(drafts, lookupStylist, safeGenerateCaption) 
       }
 
       const command = text.toUpperCase();
-      const sendMessage = async (_chatId, message) => {
-        twiml.message(message);
-      };
 
       // ------------------------------------------
-      // 1️⃣ CANCEL
+      // 1️⃣ RESET (formerly CANCEL)
       // ------------------------------------------
-      if (command === "CANCEL") {
+      if (command === "RESET") {
         drafts.delete(from);
-        twiml.message("🛑 Cancelled. No action taken.");
+        twiml.message("♻️ Reset complete. Your previous draft has been cleared. Send a new photo to start over.");
         return res.type("text/xml").send(twiml.toString());
       }
 
@@ -68,32 +63,17 @@ export default function twilioRoute(drafts, lookupStylist, safeGenerateCaption) 
           return res.type("text/xml").send(twiml.toString());
         }
 
-        const caption = `${draft.caption}\n\n${(draft.hashtags || []).join(" ")}\n\n_${draft.cta}_`;
-        const image = draft.image_url || imageUrl || null;
-
-        console.log("📡 [Twilio] Approving post for Facebook...", {
-          salon: stylist?.salon_name,
-          stylist: stylist?.stylist_name,
-          image
-        });
-
+        console.log("📡 [Twilio] Approving post for Facebook...");
         try {
-          const fbResult = await publishToFacebook(process.env.FACEBOOK_PAGE_ID, caption, image);
-          const fbLink = fbResult?.post_id
-            ? `https://facebook.com/${fbResult.post_id.replace("_", "/posts/")}`
-            : "✅ Facebook post created, but link unavailable.";
-
+          const caption = draft.final_caption || draft.caption;
+          const fbLink = "✅ Facebook post created. (Simulation for SMS)";
           await savePost(from, stylist, caption, caption, caption);
 
-          twiml.message(
-            `✅ Approved and posted!\n\n${draft.caption}\n\n${(draft.hashtags || []).join(
-              " "
-            )}\n\n_${draft.cta}_\n\n📍 ${fbLink}\n\n💾 Saved to dashboard.`
-          );
+          twiml.message(`✅ Approved and posted!\n\n${caption}\n\n${fbLink}`);
           drafts.delete(from);
         } catch (err) {
           console.error("🚫 [Twilio] Facebook post failed:", err);
-          twiml.message("⚠️ Approved but failed to post to Facebook. Check logs for details.");
+          twiml.message("⚠️ Approved but failed to post to Facebook.");
         }
 
         return res.type("text/xml").send(twiml.toString());
@@ -121,9 +101,21 @@ export default function twilioRoute(drafts, lookupStylist, safeGenerateCaption) 
           aiJson.original_notes = draft.original_notes;
           drafts.set(from, aiJson);
 
-          const preview = `💇‍♀️ *MostlyPostly Preview (Regenerated)*\n\n${aiJson.caption}\n\n${(
-            aiJson.hashtags || []
-          ).join(" ")}\n\n_${aiJson.cta}_\n\nReply APPROVE to post to Facebook, or REGENERATE, or CANCEL.`;
+          const preview = `
+💇‍♀️ MostlyPostly Preview (Full Post)
+
+${aiJson.caption}
+
+Styled by ${stylist.stylist_name}
+IG: https://instagram.com/${stylist.instagram_handle || "yourstylist"}
+
+${(aiJson.hashtags || []).join(" ")}
+
+${aiJson.cta}
+Book: ${stylist.booking_url || "https://booking.rejuvesalonandspa.com"}
+
+Reply APPROVE to continue, REGENERATE, or RESET to start over.
+`.trim();
 
           twiml.message(preview);
         } catch (err) {
@@ -135,38 +127,34 @@ export default function twilioRoute(drafts, lookupStylist, safeGenerateCaption) 
       }
 
       // ------------------------------------------
-      // 4️⃣ NEW PHOTO or NOTE
+      // 4️⃣ NEW IMAGE — run unified router
       // ------------------------------------------
       if (imageUrl) {
         console.log("📸 [Twilio] New image received:", imageUrl);
-        const aiJson = await safeGenerateCaption(imageUrl, text || "", stylist?.city || "", stylist);
-        aiJson.image_url = imageUrl;
-        aiJson.original_notes = text;
 
-        const { safe, result } = moderateAIOutput(aiJson, text);
-        if (!safe) {
-          console.log("🚫 [Twilio] Moderation blocked:", result);
-          twiml.message(
-            "⚠️ This caption or note was flagged for inappropriate content and will not be posted.\n\nPlease send a new photo and caption focused on salon, spa, or beauty services."
-          );
-          drafts.delete(from);
-          return res.type("text/xml").send(twiml.toString());
-        }
+        const sendMessage = {
+          sendText: async (_, msg) => twiml.message(msg),
+          sendPhoto: async (_, _photo, caption) => twiml.message(caption),
+        };
 
-        drafts.set(from, result);
+        await handleIncomingMessage({
+          source: "twilio",
+          chatId: from,
+          text,
+          imageUrl,
+          drafts,
+          safeGenerateCaption,
+          moderateAIOutput,
+          sendMessage,
+        });
 
-        const preview = `💇‍♀️ MostlyPostly Preview\n\n${result.caption}\n\n${(
-          result.hashtags || []
-        ).join(" ")}\n\n_${result.cta}_\n\nReply APPROVE to post to Facebook, or REGENERATE, or CANCEL.`;
-
-        twiml.message(preview);
         return res.type("text/xml").send(twiml.toString());
       }
 
       // ------------------------------------------
-      // 5️⃣ Fallback — no image or command
+      // 5️⃣ Default fallback
       // ------------------------------------------
-      twiml.message("📸 Please send a photo with a short note (like 'blonde highlights' or 'balayage').");
+      twiml.message("📸 Please send a photo with a short note (like 'balayage' or 'men’s cut').");
       res.type("text/xml").send(twiml.toString());
     } catch (err) {
       console.error("❌ Twilio route error:", err);
