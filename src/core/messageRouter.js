@@ -240,9 +240,7 @@ function queueConsentAndPrompt(chatId, imageUrl, text, sendMessage, stylist) {
   consentSessions.set(chatId, { status: "pending", queued: { imageUrl, text } });
   const prompt = `
 MostlyPostly: Please review our SMS Consent, Privacy, and Terms:
-Consent: https://sites.google.com/view/mostlypostly-consent/home
-Privacy: https://sites.google.com/view/mostlypostly-privacy-policy/home
-Terms: https://sites.google.com/view/mostlypostly-terms-conditions/home
+https://mostlypostly.github.io/mostlypostly-legal/
 
 Reply *AGREE* to opt in. Reply STOP to opt out. HELP for help. Msg&data rates may apply.
 
