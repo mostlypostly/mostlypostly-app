@@ -756,11 +756,17 @@ Reply *APPROVE* to continue, *REGENERATE*, or *CANCEL* to start over.
 
   // NEW PHOTO — Consented?
   if (imageUrl) {
-    if (!hasConsent && consentSessions.get(chatId)?.status !== "granted") {
-      await queueConsentAndPrompt(chatId, imageUrl, text, sendMessage, stylist);
-      endTimer(start);
-      return;
-    }
+  const alreadyOptedIn =
+    stylist?.compliance_opt_in ||
+    stylist?.consent?.sms_opt_in ||
+    (stylist?.role === "manager" &&
+      (stylist?.compliance_opt_in || stylist?.consent?.sms_opt_in));
+
+  if (!alreadyOptedIn && consentSessions.get(chatId)?.status !== "granted") {
+    await queueConsentAndPrompt(chatId, imageUrl, text, sendMessage, stylist);
+    endTimer(start);
+    return;
+  }
 
     await processNewImageFlow({
       chatId,
@@ -778,11 +784,18 @@ Reply *APPROVE* to continue, *REGENERATE*, or *CANCEL* to start over.
   }
 
   // Default
-  if (!hasConsent && consentSessions.get(chatId)?.status !== "granted") {
-    await queueConsentAndPrompt(chatId, null, null, sendMessage, stylist);
-    endTimer(start);
-    return;
-  }
+const alreadyOptedIn =
+  stylist?.compliance_opt_in ||
+  stylist?.consent?.sms_opt_in ||
+  (stylist?.role === "manager" &&
+    (stylist?.compliance_opt_in || stylist?.consent?.sms_opt_in));
+
+if (!alreadyOptedIn && consentSessions.get(chatId)?.status !== "granted") {
+  await queueConsentAndPrompt(chatId, null, null, sendMessage, stylist);
+  endTimer(start);
+  return;
+}
+
 
   await sendMessage.sendText(chatId, "📸 Please send a *photo* with a short note (like 'blonde balayage' or 'men’s cut').");
   endTimer(start);
