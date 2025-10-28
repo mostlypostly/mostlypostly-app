@@ -7,8 +7,9 @@ import { moderateAIOutput } from "../utils/moderation.js";
 import { savePost } from "../../db.js";
 import { createLogger } from "../utils/logHelper.js";
 import twilio from "twilio";
-const { MessagingResponse } = twilio;
 
+// ✅ Works in ESM: twilio.twiml.MessagingResponse
+const MessagingResponse = twilio.twiml.MessagingResponse;
 
 const log = createLogger("app"); // or "scheduler", "moderation", etc.
 
@@ -82,7 +83,6 @@ export default function twilioRoute(drafts, lookupStylist, safeGenerateCaption) 
             ? `https://facebook.com/${fbResult.post_id.replace("_", "/posts/")}`
             : "✅ Facebook post created, but link unavailable.";
 
-          // Save post to DB/dashboard
           await savePost(from, stylist, caption, caption, caption);
 
           twiml.message(
