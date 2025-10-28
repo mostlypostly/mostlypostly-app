@@ -4,11 +4,18 @@ import bodyParser from "body-parser";
 import twilio from "twilio";
 import { handleIncomingMessage } from "../core/messageRouter.js";
 import { moderateAIOutput } from "../utils/moderation.js";
-import { createLogger } from "../utils/logHelper.js";
 import { savePost } from "../../db.js";
+import { createLogger } from "../utils/logHelper.js";
 
 const MessagingResponse = twilio.twiml.MessagingResponse;
 const log = createLogger("app");
+
+// dynamically load publishers to avoid cold-start scope issues
+const getPublishers = async () => {
+  const { publishToFacebook } = await import("../publishers/facebook.js");
+  const { publishToInstagram } = await import("../publishers/instagram.js");
+  return { publishToFacebook, publishToInstagram };
+};
 
 export default function twilioRoute(drafts, lookupStylist, safeGenerateCaption) {
   const router = express.Router();
@@ -22,9 +29,7 @@ export default function twilioRoute(drafts, lookupStylist, safeGenerateCaption) 
       const from = req.body.From;
       const text = (req.body.Body || "").trim();
       const numMedia = parseInt(req.body.NumMedia || "0", 10);
-
       if (!from) {
-        console.warn("⚠️ Missing sender (From)");
         twiml.message("⚠️ No sender found.");
         return res.type("text/xml").send(twiml.toString());
       }
@@ -35,7 +40,7 @@ export default function twilioRoute(drafts, lookupStylist, safeGenerateCaption) 
         city: "Carmel",
       };
 
-      // 📸 Get image if any
+      // capture photo if present
       let imageUrl = null;
       if (numMedia > 0) {
         imageUrl = req.body[`MediaUrl${numMedia - 1}`];
@@ -44,94 +49,87 @@ export default function twilioRoute(drafts, lookupStylist, safeGenerateCaption) 
 
       const command = text.toUpperCase();
 
-      // ------------------------------------------
-      // 1️⃣ RESET (formerly CANCEL)
-      // ------------------------------------------
+      // ----------------------------------------------------
+      // 1️⃣ RESET
+      // ----------------------------------------------------
       if (command === "RESET") {
         drafts.delete(from);
         twiml.message("♻️ Reset complete. Your previous draft has been cleared. Send a new photo to start over.");
         return res.type("text/xml").send(twiml.toString());
       }
 
-      // ------------------------------------------
-// 2️⃣ APPROVE
-// ------------------------------------------
-if (command === "APPROVE") {
-  const draft = drafts.get(from);
-  if (!draft) {
-    twiml.message("⚠️ No draft found. Please send a photo first.");
-    return res.type("text/xml").send(twiml.toString());
-  }
+      // ----------------------------------------------------
+      // 2️⃣ APPROVE
+      // ----------------------------------------------------
+      if (command === "APPROVE") {
+        const draft = drafts.get(from);
+        if (!draft) {
+          twiml.message("⚠️ No draft found. Please send a photo first.");
+          return res.type("text/xml").send(twiml.toString());
+        }
 
-  // Build caption exactly like Telegram
-  const caption = [
-    "💇‍♀️ MostlyPostly Preview (Full Post)",
-    "",
-    draft.caption,
-    "",
-    `Styled by ${stylist?.stylist_name || "a stylist"}`,
-    stylist?.instagram_handle
-      ? `IG: https://instagram.com/${stylist.instagram_handle.replace(/^@/, "")}`
-      : "",
-    "",
-    (draft.hashtags || []).join(" "),
-    "",
-    `${draft.cta}`,
-    "",
-    `Book: ${stylist?.booking_url || stylist?.salon_booking_url || ""}`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+        const caption = [
+          "💇‍♀️ MostlyPostly Preview (Full Post)",
+          "",
+          draft.caption,
+          "",
+          `Styled by ${stylist?.stylist_name || "a stylist"}`,
+          stylist?.instagram_handle
+            ? `IG: https://instagram.com/${stylist.instagram_handle.replace(/^@/, "")}`
+            : "",
+          "",
+          (draft.hashtags || []).join(" "),
+          "",
+          `${draft.cta}`,
+          "",
+          `Book: ${stylist?.booking_url || stylist?.salon_booking_url || ""}`,
+        ]
+          .filter(Boolean)
+          .join("\n");
 
-  const image = draft.image_url || imageUrl || null;
+        const image = draft.image_url || imageUrl || null;
 
-  console.log("📡 [Twilio] Approving post for Facebook + Instagram...", {
-    salon: stylist?.salon_name,
-    stylist: stylist?.stylist_name,
-    image,
-  });
+        console.log("📡 [Twilio] Approving post for Facebook + Instagram...", {
+          salon: stylist?.salon_name,
+          stylist: stylist?.stylist_name,
+          image,
+        });
 
-  try {
-    // ✅ Call both publishers in parallel
-    const [fbResult, igResult] = await Promise.allSettled([
-      publishToFacebook(process.env.FACEBOOK_PAGE_ID, caption, image),
-      process.env.PUBLISH_TO_INSTAGRAM === "true"
-        ? (await import("../publishers/instagram.js")).publishToInstagram(
-            process.env.INSTAGRAM_USER_ID,
-            caption,
-            image
-          )
-        : Promise.resolve({ status: "skipped" }),
-    ]);
+        try {
+          const { publishToFacebook, publishToInstagram } = await getPublishers();
 
-    // 🧾 Results summary
-    const fbSuccess = fbResult.status === "fulfilled";
-    const igSuccess = igResult.status === "fulfilled";
+          const [fbResult, igResult] = await Promise.allSettled([
+            publishToFacebook(process.env.FACEBOOK_PAGE_ID, caption, image),
+            process.env.PUBLISH_TO_INSTAGRAM === "true"
+              ? publishToInstagram(process.env.INSTAGRAM_USER_ID, caption, image)
+              : Promise.resolve({ status: "skipped" }),
+          ]);
 
-    // Save post to dashboard
-    await savePost(from, stylist, caption, caption, caption);
+          const fbSuccess = fbResult.status === "fulfilled";
+          const igSuccess = igResult.status === "fulfilled";
 
-    let reply = "✅ Approved and posted!\n\n";
-    if (fbSuccess)
-      reply += `📘 Facebook: https://facebook.com/${fbResult.value.post_id.replace("_", "/posts/")}\n`;
-    if (igSuccess) reply += "📸 Instagram: Posted successfully!\n";
-    if (!fbSuccess && !igSuccess)
-      reply += "⚠️ Posting failed on both platforms. Check logs.";
+          await savePost(from, stylist, caption, caption, caption);
 
-    twiml.message(reply.trim());
-    drafts.delete(from);
-  } catch (err) {
-    console.error("🚫 [Twilio] Publish failed:", err);
-    twiml.message("⚠️ Approved but failed to post to social platforms. Check logs for details.");
-  }
+          let reply = "✅ Approved and posted!\n\n";
+          if (fbSuccess && fbResult.value?.post_id)
+            reply += `📘 Facebook: https://facebook.com/${fbResult.value.post_id.replace("_", "/posts/")}\n`;
+          if (igSuccess) reply += "📸 Instagram: Posted successfully!\n";
+          if (!fbSuccess && !igSuccess)
+            reply += "⚠️ Posting failed on both platforms. Check logs.";
 
-  return res.type("text/xml").send(twiml.toString());
-}
+          twiml.message(reply.trim());
+          drafts.delete(from);
+        } catch (err) {
+          console.error("🚫 [Twilio] Publish failed:", err);
+          twiml.message("⚠️ Approved but failed to post to social platforms. Check logs for details.");
+        }
 
+        return res.type("text/xml").send(twiml.toString());
+      }
 
-      // ------------------------------------------
+      // ----------------------------------------------------
       // 3️⃣ REGENERATE
-      // ------------------------------------------
+      // ----------------------------------------------------
       if (command === "REGENERATE") {
         const draft = drafts.get(from);
         if (!draft?.image_url) {
@@ -176,9 +174,9 @@ Reply APPROVE to continue, REGENERATE, or RESET to start over.
         return res.type("text/xml").send(twiml.toString());
       }
 
-      // ------------------------------------------
-      // 4️⃣ NEW IMAGE — run unified router
-      // ------------------------------------------
+      // ----------------------------------------------------
+      // 4️⃣ NEW IMAGE
+      // ----------------------------------------------------
       if (imageUrl) {
         console.log("📸 [Twilio] New image received:", imageUrl);
 
@@ -201,9 +199,9 @@ Reply APPROVE to continue, REGENERATE, or RESET to start over.
         return res.type("text/xml").send(twiml.toString());
       }
 
-      // ------------------------------------------
-      // 5️⃣ Default fallback
-      // ------------------------------------------
+      // ----------------------------------------------------
+      // 5️⃣ DEFAULT FALLBACK
+      // ----------------------------------------------------
       twiml.message("📸 Please send a photo with a short note (like 'balayage' or 'men’s cut').");
       res.type("text/xml").send(twiml.toString());
     } catch (err) {
