@@ -41,10 +41,10 @@
         "mens_grooming"
       ],
       "consent": {
-        "sms_opt_in": false,
+        "sms_opt_in": true,
         "timestamp": ""
       },
-      "compliance_opt_in": false,
+      "compliance_opt_in": true,
       "compliance_timestamp": ""
     }
   ],
