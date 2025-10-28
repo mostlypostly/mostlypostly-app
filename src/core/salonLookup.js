@@ -173,22 +173,34 @@ export function lookupStylist(identifier) {
 }
 
 export function lookupManager(identifier) {
+  // Use the same cachedSalons array already managed by loadSalons()
+  const salons = getAllSalons ? getAllSalons() : cachedSalons || [];
+  if (!salons.length) {
+    console.warn("⚠️ No salons loaded when calling lookupManager()");
+    return null;
+  }
+
   const idStr = String(identifier).trim();
 
-  for (const [salonId, salon] of Object.entries(salons)) {
-    for (const [key, manager] of Object.entries(salon.managers || {})) {
+  for (const salon of salons) {
+    const managers = salon.managers || [];
+    for (const manager of managers) {
       const chat = String(manager.chat_id || "").trim();
       const phone = String(manager.phone || "").trim();
       const id = String(manager.id || "").trim();
-
       if (chat === idStr || phone === idStr || id === idStr) {
-        return { ...manager, phone, salonId };
+        return {
+          ...manager,
+          salon_id: salon.salon_id || null,
+          salon_info: salon.salon_info || {},
+        };
       }
     }
   }
 
   return null;
 }
+
 
 export function getSalonByStylist(identifier) {
   if (!cachedSalons.length) return null;
