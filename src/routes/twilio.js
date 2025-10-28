@@ -58,78 +58,76 @@ export default function twilioRoute(drafts, lookupStylist, safeGenerateCaption) 
         return res.type("text/xml").send(twiml.toString());
       }
 
-      // ----------------------------------------------------
-      // 2️⃣ APPROVE
-      // ----------------------------------------------------
-      if (command === "APPROVE") {
-        const draft = drafts.get(from);
-        if (!draft) {
-          twiml.message("⚠️ No draft found. Please send a photo first.");
-          return res.type("text/xml").send(twiml.toString());
-        }
+      // ------------------------------------------
+// 2️⃣ APPROVE
+// ------------------------------------------
+if (command === "APPROVE") {
+  const draft = drafts.get(from);
+  if (!draft) {
+    twiml.message("⚠️ No draft found. Please send a photo first.");
+    return res.type("text/xml").send(twiml.toString());
+  }
 
-        const caption = [
-          "💇‍♀️ MostlyPostly Preview (Full Post)",
-          "",
-          draft.caption,
-          "",
-          `Styled by ${stylist?.stylist_name || "a stylist"}`,
-          stylist?.instagram_handle
-            ? `IG: https://instagram.com/${stylist.instagram_handle.replace(/^@/, "")}`
-            : "",
-          "",
-          (draft.hashtags || []).join(" "),
-          "",
-          `${draft.cta}`,
-          "",
-          `Book: ${stylist?.booking_url || stylist?.salon_booking_url || ""}`,
-        ]
-          .filter(Boolean)
-          .join("\n");
+  const caption = `${draft.caption}\n\n${(draft.hashtags || []).join(" ")}\n\n_${draft.cta}_`;
+  const originalImage = draft.image_url || imageUrl || null;
 
-        const image = draft.image_url || imageUrl || null;
+  console.log("📡 [Twilio] Approving post for Facebook + Instagram...", {
+    salon: stylist?.salon_name,
+    stylist: stylist?.stylist_name,
+    image: originalImage
+  });
 
-        console.log("📡 [Twilio] Approving post for Facebook + Instagram...", {
-          salon: stylist?.salon_name,
-          stylist: stylist?.stylist_name,
-          image,
-        });
-        
-        // ✅ Delay ensures file fully written before publishing
-        await new Promise((r) => setTimeout(r, 1000));
+  try {
+    // ✅ Step 1: Ensure Twilio media is rehosted locally (so Facebook can fetch it)
+    const { rehostTwilioMedia } = await import("../utils/rehostTwilioMedia.js");
+    const publicImageUrl = await rehostTwilioMedia(originalImage);
+    console.log("✅ Twilio media rehosted:", publicImageUrl);
 
-        try {
-          const { publishToFacebook, publishToInstagram } = await getPublishers();
+    // ✅ Step 2: Wait 1 second to make sure Render static route is ready
+    await new Promise((r) => setTimeout(r, 1000));
 
-          const [fbResult, igResult] = await Promise.allSettled([
-            
-            publishToFacebook(process.env.FACEBOOK_PAGE_ID, caption, image),
-            process.env.PUBLISH_TO_INSTAGRAM === "true"
-              ? publishToInstagram(process.env.INSTAGRAM_USER_ID, caption, image)
-              : Promise.resolve({ status: "skipped" }),
-          ]);
+    // ✅ Step 3: Dynamically import Facebook + Instagram publishers
+    const { publishToFacebook, publishToInstagram } = await import("../publishers/facebook.js");
+    const { default: publishIG } = await import("../publishers/instagram.js");
 
-          const fbSuccess = fbResult.status === "fulfilled";
-          const igSuccess = igResult.status === "fulfilled";
+    // ✅ Step 4: Post to both
+    const [fbResult, igResult] = await Promise.allSettled([
+      publishToFacebook(process.env.FACEBOOK_PAGE_ID, caption, publicImageUrl),
+      process.env.PUBLISH_TO_INSTAGRAM === "true"
+        ? publishIG(process.env.INSTAGRAM_USER_ID, caption, publicImageUrl)
+        : Promise.resolve({ status: "skipped" }),
+    ]);
 
-          await savePost(from, stylist, caption, caption, caption);
+    // ✅ Step 5: Build response text
+    const fbSuccess = fbResult.status === "fulfilled";
+    const igSuccess = igResult.status === "fulfilled";
 
-          let reply = "✅ Approved and posted!\n\n";
-          if (fbSuccess && fbResult.value?.post_id)
-            reply += `📘 Facebook: https://facebook.com/${fbResult.value.post_id.replace("_", "/posts/")}\n`;
-          if (igSuccess) reply += "📸 Instagram: Posted successfully!\n";
-          if (!fbSuccess && !igSuccess)
-            reply += "⚠️ Posting failed on both platforms. Check logs.";
+    let responseMsg = "✅ Approved and posted!\n\n" + caption;
+    if (fbSuccess && fbResult.value?.post_id) {
+      responseMsg += `\n\n📘 Facebook: https://facebook.com/${fbResult.value.post_id.replace("_", "/posts/")}`;
+    }
+    if (igSuccess && igResult.value?.id) {
+      responseMsg += `\n📸 Instagram: https://instagram.com/p/${igResult.value.id}/`;
+    }
 
-          twiml.message(reply.trim());
-          drafts.delete(from);
-        } catch (err) {
-          console.error("🚫 [Twilio] Publish failed:", err);
-          twiml.message("⚠️ Approved but failed to post to social platforms. Check logs for details.");
-        }
+    if (!fbSuccess || !igSuccess) {
+      console.warn("⚠️ [Twilio] One or more publish operations failed:", fbResult, igResult);
+      responseMsg += `\n\n⚠️ Some posts may have failed. Check logs.`;
+    }
 
-        return res.type("text/xml").send(twiml.toString());
-      }
+    // ✅ Step 6: Save to DB
+    await savePost(from, stylist, caption, caption, caption);
+
+    // ✅ Step 7: Reply to user
+    twiml.message(responseMsg);
+    drafts.delete(from);
+  } catch (err) {
+    console.error("🚫 [Twilio] Publish failed:", err);
+    twiml.message("⚠️ Approved but failed to post to Facebook/Instagram. Check logs for details.");
+  }
+
+  return res.type("text/xml").send(twiml.toString());
+}
 
       // ----------------------------------------------------
       // 3️⃣ REGENERATE
