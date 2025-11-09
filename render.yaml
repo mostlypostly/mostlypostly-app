@@ -1,0 +1,59 @@
+# render.yaml
+# 🚀 MostlyPostly — Render Deployment Config
+# Author: Troy Hardister
+# Version: v1.1 (Pilot Expansion)
+
+services:
+  - type: web
+    name: mostlypostly
+    env: node
+    plan: starter
+    region: ohio  # (or your preferred Render region)
+    buildCommand: npm install
+    startCommand: node server.js
+
+    # ✅ Environment Variables
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+
+      # 🔑 API Keys (add your actual values in Render dashboard)
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_PHONE_NUMBER
+        sync: false
+      - key: META_PAGE_ID
+        sync: false
+      - key: META_PAGE_TOKEN
+        sync: false
+      - key: META_IG_BUSINESS_ID
+        sync: false
+
+    # 🧱 Persistent Disk (for database, logs, uploads)
+    disk:
+      name: postly-data
+      mountPath: /data
+      sizeGB: 2
+
+    # 🧠 Health Checks
+    healthCheckPath: /
+    autoDeploy: true
+
+    # ⚙️ Node version (explicit for stability)
+    buildFilter:
+      paths:
+        - package.json
+        - server.js
+        - src/**
+        - salons/**
+        - data/**
+        - render.yaml
+
+# 🪣 Optional Future: S3-compatible media layer (for AWS migration)
+# You can later replace /data/uploads with an S3 bucket mount.
