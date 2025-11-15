@@ -46,7 +46,9 @@ CREATE TABLE IF NOT EXISTS stylists (
   updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- ===== Posts & approvals =====
+-- ===========================
+-- POSTS TABLE
+-- ===========================
 CREATE TABLE IF NOT EXISTS posts (
   id                 TEXT PRIMARY KEY,
   salon_id           TEXT NOT NULL,
@@ -86,19 +88,29 @@ CREATE TABLE IF NOT EXISTS posts (
   -- REQUIRED FOR SCHEDULER
   scheduled_for      TEXT,
 
-  -- REQUIRED FOR RECOVERY (your scheduler logs show retry_count missing)
+  -- REQUIRED FOR RECOVERY
   retry_count        INTEGER DEFAULT 0,
   retry_log          TEXT,
 
   approved_by        TEXT,
   approved_at        TEXT,
 
-  salon_post_number INTEGER,
+  salon_post_number  INTEGER,
 
   _meta              TEXT,
   created_at         TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at         TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_posts_salon_created   ON posts(salon_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_status_sched    ON posts(status, published_at);
+
+CREATE TRIGGER IF NOT EXISTS trg_posts_updated_at
+AFTER UPDATE ON posts
+FOR EACH ROW BEGIN
+  UPDATE posts SET updated_at = datetime('now') WHERE id = NEW.id;
+END;
+
 
 
 
