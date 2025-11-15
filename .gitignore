@@ -1,8 +1,33 @@
-# Ignore local environment and sensitive files
+# Environment files
 .env
+.env.*
+
+# Node
+node_modules/
+
+# Logs
 logs/
 *.log
+
+# SQLite DB files
 postly.db
-node_modules/
+postly*.db*
+*.db-shm
+*.db-wal
+
+# Uploads
+uploads/
 public/uploads/
+
+# macOS metadata
 .DS_Store
+
+# Local dev artifacts
+project_tree.txt
+tree.js
+import
+typeof
+
+# Old/legacy files if present
+src/core/_old/
+src/core/_old/*.js

@@ -3,12 +3,11 @@
 import express from "express";
 import fetch from "node-fetch";
 import { handleIncomingMessage } from "../core/messageRouter.js";
-import { moderateAIOutput } from "../utils/moderation.js";
+import moderateAIOutput from "../utils/moderation.js";
 import { savePost } from "../core/storage.js";
 import { createLogger } from "../utils/logHelper.js";
 import { saveStylistConsent } from "../core/storage.js";
-import { lookupStylist, lookupManager, loadSalons } from "../core/salonLookup.js";
-
+import { lookupStylist, loadSalons } from "../core/salonLookup.js";
 
 const log = createLogger("app"); // or "scheduler", "moderation", etc.
 

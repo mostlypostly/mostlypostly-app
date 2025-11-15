@@ -8,18 +8,35 @@
 
 ---
 
-## 🧭 Overview
+## 🧮 Tenant Health Check (Automation)
 
-**MostlyPostly** is an AI-driven content automation system designed for salon teams.  
-Stylists send a photo via **SMS (Twilio)** or **Telegram**, and MostlyPostly automatically:
+To ensure every record carries a valid salon_id:
 
-1. Detects the service type (cut, color, extension, etc.)
-2. Generates a caption + hashtags + CTA as JSON
-3. Sends a preview for approval or edit
-4. Publishes the final post to **Facebook** and **Instagram**
-5. Logs moderation, analytics, and scheduling data to SQLite
+```bash
+node scripts/check-tenant-health.js
 
-Built for real-world salon operations — safe, fast, and multi-tenant ready.
+---
+
+## 🧩 v1.1 — Multi-Tenant Upgrade (November 2025)
+
+**Overview:**  
+MostlyPostly now supports multiple salons in a single deployment.  
+All posts, media, analytics, and logs include a `salon_id` for complete tenant isolation.
+
+### 🔑 Key Changes
+- Added `salon_id` column to all database tables  
+- Added tenant-aware middleware (`tenantFromLink`)  
+- Per-salon tokens, booking URLs, posting windows, and logs  
+- Updated Twilio → Scheduler → Publisher flow to carry `salon_id`  
+- New health scripts:
+  - `scripts/verify-salon-id.js`
+  - `scripts/check-tenant-health.js`
+- Added `/manager/login` and `/manager/logout` routes  
+- Daily integrity checks ensure all new rows include `salon_id`  
+
+**Migration Note:**  
+Legacy posts before v1.1 were backfilled with `salon_id='rejuvesalonspa'`.  
+All new data now enforces tenant context automatically.
 
 ---
 
@@ -292,14 +309,14 @@ Expected output:
 
 ## 🧭 Roadmap
 
-| Version | Focus                                  | Status         |
-| ------- | -------------------------------------- | -------------- |
-| v1.0    | Stable single-salon MVP                | ✅ Complete     |
-| v1.1    | Multi-tenant scaling + approvals audit | 🚧 In Progress |
-| v1.2    | Media cache & deduplication            | ⏳ Next         |
-| v1.3    | Analytics dashboard (web)              | Planned        |
-| v1.4    | Token management (FB system user)      | Planned        |
-| v1.5    | AWS deployment readiness               | Future         |
+| Version | Focus                                    | Status         |
+| ------- | ---------------------------------------- | -------------- |
+| v1.0    | Stable single-salon MVP                  | ✅ Complete    |
+| v1.1    | Multi-tenant scaling + tenant protection | ✅ Complete    |
+| v1.2    | Media cache & deduplication              | ⏳ Next        |
+| v1.3    | Analytics dashboard (web)                | Planned        |
+| v1.4    | Token management (FB system user)        | Planned        |
+| v1.5    | AWS deployment readiness                 | Future         |
 
 ---
 

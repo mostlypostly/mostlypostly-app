@@ -1,248 +1,290 @@
-// routes/dashboard.js — Postly Dashboard (Enhanced with Scheduler Analytics Toggle)
-const express = require("express");
-const fetch = require("node-fetch");
+// src/routes/dashboard.js — MostlyPostly Database Dashboard (styled + filters + CSV)
+
+import express from "express";
+import { db } from "../../db.js";
+import { Parser } from "json2csv"; // npm i json2csv
+import { DateTime } from "luxon";
+import { getSalonPolicy } from "../scheduler.js";
+
 const router = express.Router();
 
-module.exports = (db) => {
-  router.get("/", async (req, res) => {
-    const view = req.query.view || "database"; // 'database' or 'scheduler'
-    const stylistFilter = req.query.stylist || null;
+function salonNameFromId(salonId) {
+  const policy = getSalonPolicy(salonId);
+  return policy?.salon_info?.name || policy?.name || salonId;
+}
 
-    try {
-      // ======================================================
-      // 📊 View 1 — Database View (existing)
-      // ======================================================
-      if (view === "database") {
-        db.all("SELECT * FROM posts ORDER BY created_at DESC", [], (err, posts) => {
-          if (err) return res.status(500).send("DB error");
+function appHost() {
+  return process.env.HOST || "http://localhost:3000";
+}
 
-          db.all(
-            `SELECT stylist_name, COUNT(*) as total_posts 
-             FROM posts GROUP BY stylist_name ORDER BY total_posts DESC`,
-            [],
-            (err2, analytics) => {
-              if (err2) return res.status(500).send("DB error");
+function navBar(current = "database", salon_id = "", manager_phone = "") {
+  const link = (href, label, key) =>
+    `<a href="${href}" class="${
+      current === key
+        ? "text-white bg-blue-600"
+        : "text-blue-300 hover:text-white hover:bg-blue-500"
+    } px-3 py-1 rounded transition">${label}</a>`;
 
-              const totalPosts = posts.length;
-              const topStylist = analytics[0]?.stylist_name || "N/A";
-              const topStylistCount = analytics[0]?.total_posts || 0;
+  const qsSalon = salon_id ? `?salon=${encodeURIComponent(salon_id)}` : "";
+  return `
+  <header class="bg-black/95 text-blue-300 shadow-md sticky top-0 z-10">
+    <div class="max-w-6xl mx-auto flex items-center justify-between px-4 py-3">
+      <div class="flex items-center gap-2">
+        <span class="inline-block w-2 h-2 rounded-full bg-blue-500 shadow-[0_0_10px_2px_rgba(59,130,246,0.9)]"></span>
+        <a href="${appHost()}/manager" class="font-semibold tracking-wide">MostlyPostly — Portal</a>
+      </div>
+      <nav class="flex gap-2">
+        ${link("/manager", "Manager", "manager")}
+        ${link(`/dashboard${qsSalon}`, "Database", "database")}
+        ${link(`/analytics${qsSalon}`, "Scheduler Analytics", "scheduler")}
+        ${link(`/index.html`, "Policies", "policies")}
+      </nav>
+    </div>
+  </header>
+  <div class="bg-gradient-to-b from-black via-zinc-950 to-black h-[1px]"></div>
+  `;
+}
 
-              const visiblePosts = stylistFilter
-                ? posts.filter((p) => p.stylist_name === stylistFilter)
-                : posts;
+function pageShell({ title, body, current = "database", salon_id = "", manager_phone = "" }) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>${title}</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-black text-zinc-100">
+  ${navBar(current, salon_id, manager_phone)}
+  <main class="max-w-6xl mx-auto px-4 py-6">
+    ${body}
+  </main>
+</body>
+</html>`;
+}
 
-              const stylistOptions = [
-                `<option value="">All Stylists</option>`,
-                ...analytics.map(
-                  (a) =>
-                    `<option value="${a.stylist_name}" ${
-                      stylistFilter === a.stylist_name ? "selected" : ""
-                    }>${a.stylist_name} (${a.total_posts})</option>`
-                ),
-              ].join("");
+// Safely format any timestamp (ISO or SQL) in the salon's local timezone
+function formatLocalTime(ts, salonId) {
+  if (!ts) return "—";
+  try {
+    const salonPolicy = getSalonPolicy(salonId);
+    const tz = salonPolicy?.timezone || "America/Indiana/Indianapolis";
+    let dt;
 
-              const rows = visiblePosts
-                .map(
-                  (r) => `
-                  <tr class="hover:bg-gray-50">
-                    <td class="py-2 px-4 border-b">${r.id}</td>
-                    <td class="py-2 px-4 border-b">${r.stylist_name}</td>
-                    <td class="py-2 px-4 border-b">${r.salon_name}</td>
-                    <td class="py-2 px-4 border-b">${r.city}</td>
-                    <td class="py-2 px-4 border-b">${new Date(
-                      r.created_at
-                    ).toLocaleString()}</td>
-                    <td class="py-2 px-4 border-b">
-                      <details>
-                        <summary class="cursor-pointer text-blue-600 hover:underline">View</summary>
-                        <p><strong>Instagram:</strong><br>${r.ig_post.replace(/\n/g, "<br>")}</p>
-                        <p><strong>Facebook:</strong><br>${r.fb_post.replace(/\n/g, "<br>")}</p>
-                        <p><strong>X:</strong><br>${r.x_post.replace(/\n/g, "<br>")}</p>
-                      </details>
-                    </td>
-                    <td class="py-2 px-4 border-b">
-                      <form method="POST" action="/publish/facebook">
-                        <input type="hidden" name="post_id" value="${r.id}">
-                        <input type="hidden" name="stylist" value="${r.stylist_name}">
-                        <button class="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 text-sm">
-                          Repost
-                        </button>
-                      </form>
-                    </td>
-                  </tr>`
-                )
-                .join("");
-
-              const html = `
-                <!DOCTYPE html>
-                <html lang="en">
-                <head>
-                  <meta charset="UTF-8" />
-                  <title>Postly Dashboard</title>
-                  <script src="https://cdn.tailwindcss.com"></script>
-                </head>
-                <body class="bg-gray-100 text-gray-800">
-                  <div class="max-w-7xl mx-auto p-6">
-                    <h1 class="text-3xl font-bold mb-2">💇‍♀️ Postly Dashboard</h1>
-                    <p class="text-gray-600 mb-6">Monitor stylist activity and caption previews.</p>
-
-                      <!-- 🔄 Toggle Bar -->
-                      <div class="flex gap-4 mb-6">
-                        <a href="/dashboard?view=database" class="px-3 py-1 rounded ${view === "database" ? "bg-indigo-600 text-white" : "bg-white text-gray-700 border"}">Database View</a>
-                        <a href="/dashboard?view=scheduler" class="px-3 py-1 rounded ${view === "scheduler" ? "bg-indigo-600 text-white" : "bg-white text-gray-700 border"}">Scheduler Analytics</a>
-                      </div>
-
-                    <!-- 🔄 Toggle Bar -->
-                    <div class="flex gap-4 mb-6">
-                      <a href="/dashboard?view=database" class="px-3 py-1 rounded ${
-                        view === "database"
-                          ? "bg-indigo-600 text-white"
-                          : "bg-white text-gray-700 border"
-                      }">Database View</a>
-                      <a href="/dashboard?view=scheduler" class="px-3 py-1 rounded ${
-                        view === "scheduler"
-                          ? "bg-indigo-600 text-white"
-                          : "bg-white text-gray-700 border"
-                      }">Scheduler Analytics</a>
-                    </div>
-
-                    <div class="grid grid-cols-3 gap-4 mb-8">
-                      <div class="bg-white shadow rounded-lg p-4 text-center">
-                        <h2 class="text-lg font-semibold text-gray-700">Total Posts</h2>
-                        <p class="text-2xl font-bold text-indigo-600">${totalPosts}</p>
-                      </div>
-                      <div class="bg-white shadow rounded-lg p-4 text-center">
-                        <h2 class="text-lg font-semibold text-gray-700">Top Stylist</h2>
-                        <p class="text-2xl font-bold text-green-600">${topStylist}</p>
-                        <p class="text-gray-500">${topStylistCount} posts</p>
-                      </div>
-                      <div class="bg-white shadow rounded-lg p-4 text-center">
-                        <h2 class="text-lg font-semibold text-gray-700">Last Update</h2>
-                        <p class="text-2xl font-bold text-gray-700">${new Date().toLocaleTimeString()}</p>
-                      </div>
-                    </div>
-
-                    <form method="GET" action="/dashboard" class="mb-6">
-                      <input type="hidden" name="view" value="database" />
-                      <label for="stylist" class="mr-2 font-semibold">Filter by Stylist:</label>
-                      <select name="stylist" id="stylist" class="border rounded p-1" onchange="this.form.submit()">
-                        ${stylistOptions}
-                      </select>
-                    </form>
-
-                    <table class="min-w-full border bg-white shadow rounded-lg">
-                      <thead class="bg-gray-200">
-                        <tr>
-                          <th class="py-2 px-4 border-b text-left">ID</th>
-                          <th class="py-2 px-4 border-b text-left">Stylist</th>
-                          <th class="py-2 px-4 border-b text-left">Salon</th>
-                          <th class="py-2 px-4 border-b text-left">City</th>
-                          <th class="py-2 px-4 border-b text-left">Date</th>
-                          <th class="py-2 px-4 border-b text-left">Posts</th>
-                          <th class="py-2 px-4 border-b text-left">Action</th>
-                        </tr>
-                      </thead>
-                      <tbody>${rows}</tbody>
-                    </table>
-                  </div>
-                </body>
-                </html>`;
-              res.send(html);
-            }
-          );
-        });
-      }
-
-      // ======================================================
-      // 📈 View 2 — Scheduler Analytics (Chart.js)
-      // ======================================================
-      if (view === "scheduler") {
-        const response = await fetch("http://localhost:3000/analytics/scheduler");
-        const data = await response.json();
-
-        const platforms = Object.keys(data.summary?.byPlatform || {});
-        const platformCounts = Object.values(data.summary?.byPlatform || {});
-        const types = Object.keys(data.summary?.byType || {});
-        const typeCounts = Object.values(data.summary?.byType || {});
-
-        const html = `
-          <!DOCTYPE html>
-          <html lang="en">
-          <head>
-            <meta charset="UTF-8" />
-            <title>Scheduler Analytics</title>
-            <script src="https://cdn.tailwindcss.com"></script>
-            <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-          </head>
-          <body class="bg-gray-100 text-gray-800">
-            <div class="max-w-5xl mx-auto p-6">
-              <h1 class="text-3xl font-bold mb-2">📈 Scheduler Analytics</h1>
-              <p class="text-gray-600 mb-6">Visual summary from scheduler logs.</p>
-
-              <!-- 🔄 Toggle Bar -->
-              <div class="flex gap-4 mb-6">
-                <a href="/dashboard?view=database" class="px-3 py-1 rounded ${
-                  view === "database"
-                    ? "bg-indigo-600 text-white"
-                    : "bg-white text-gray-700 border"
-                }">Database View</a>
-                <a href="/dashboard?view=scheduler" class="px-3 py-1 rounded ${
-                  view === "scheduler"
-                    ? "bg-indigo-600 text-white"
-                    : "bg-white text-gray-700 border"
-                }">Scheduler Analytics</a>
-              </div>
-
-              <div class="grid grid-cols-2 gap-6">
-                <div class="bg-white shadow rounded-lg p-4">
-                  <h2 class="text-lg font-semibold text-gray-700 mb-3">Posts by Platform</h2>
-                  <canvas id="platformChart"></canvas>
-                </div>
-                <div class="bg-white shadow rounded-lg p-4">
-                  <h2 class="text-lg font-semibold text-gray-700 mb-3">Posts by Type</h2>
-                  <canvas id="typeChart"></canvas>
-                </div>
-              </div>
-
-              <script>
-                const platformCtx = document.getElementById('platformChart');
-                const typeCtx = document.getElementById('typeChart');
-
-                new Chart(platformCtx, {
-                  type: 'bar',
-                  data: {
-                    labels: ${JSON.stringify(platforms)},
-                    datasets: [{
-                      label: 'Posts per Platform',
-                      data: ${JSON.stringify(platformCounts)},
-                      backgroundColor: 'rgba(99, 102, 241, 0.7)'
-                    }]
-                  },
-                  options: { plugins: { legend: { display: false } } }
-                });
-
-                new Chart(typeCtx, {
-                  type: 'pie',
-                  data: {
-                    labels: ${JSON.stringify(types)},
-                    datasets: [{
-                      data: ${JSON.stringify(typeCounts)},
-                      backgroundColor: ['#6366f1','#34d399','#fbbf24','#f87171','#60a5fa']
-                    }]
-                  },
-                  options: { plugins: { legend: { position: 'bottom' } } }
-                });
-              </script>
-            </div>
-          </body>
-          </html>`;
-        res.send(html);
-      }
-    } catch (err) {
-      console.error("⚠️ Dashboard route error:", err);
-      res.status(500).send("Internal Server Error");
+    if (typeof ts === "string" && ts.includes("T")) {
+      // ISO (likely UTC)
+      dt = DateTime.fromISO(ts, { zone: "utc" });
+    } else {
+      // SQLite DATETIME (assume UTC)
+      dt = DateTime.fromSQL(ts, { zone: "utc" });
     }
-  });
+    if (!dt.isValid) return ts;
 
-  return router;
-};
+    return dt.setZone(tz).toFormat("MMM d, yyyy • h:mm a");
+  } catch {
+    return ts;
+  }
+}
+
+// Resolve a date range into UTC ISO strings for SQLite comparisons
+function rangeToUtc(range, tz, customStart, customEnd) {
+  const now = DateTime.now().setZone(tz);
+  let from = DateTime.fromMillis(0).setZone(tz); // default "All" = epoch
+  let to = now;
+
+  switch ((range || "all").toLowerCase()) {
+    case "today":
+      from = now.startOf("day"); to = now.endOf("day"); break;
+    case "yesterday":
+      from = now.minus({ days: 1 }).startOf("day");
+      to = now.minus({ days: 1 }).endOf("day"); break;
+    case "this week":
+      from = now.startOf("week"); to = now.endOf("week"); break;
+    case "last week":
+      from = now.minus({ weeks: 1 }).startOf("week");
+      to = now.minus({ weeks: 1 }).endOf("week"); break;
+    case "this month":
+      from = now.startOf("month"); to = now.endOf("month"); break;
+    case "last month":
+      from = now.minus({ months: 1 }).startOf("month");
+      to = now.minus({ months: 1 }).endOf("month"); break;
+    case "this year":
+      from = now.startOf("year"); to = now.endOf("year"); break;
+    case "last year":
+      from = now.minus({ years: 1 }).startOf("year");
+      to = now.minus({ years: 1 }).endOf("year"); break;
+    case "custom":
+      if (customStart) from = DateTime.fromISO(customStart, { zone: tz });
+      if (customEnd) to = DateTime.fromISO(customEnd, { zone: tz });
+      break;
+    case "all":
+    default:
+      // leave from=epoch, to=now
+      break;
+  }
+
+  return {
+    fromUtc: from.toUTC().toISO({ suppressMilliseconds: true }),
+    toUtc: to.toUTC().toISO({ suppressMilliseconds: true }),
+  };
+}
+
+router.get("/", (req, res) => {
+  const salon_id = req.query.salon || "rejuve-salon-spa";
+  const salonName = salonNameFromId(salon_id);
+  const salonPolicy = getSalonPolicy(salon_id);
+  const tz = salonPolicy?.timezone || "America/Indiana/Indianapolis";
+
+  // Filters
+  const range = (req.query.range || "all").toLowerCase();
+  const statusParam = (req.query.status || "all").toLowerCase();
+  const stylist = (req.query.stylist || "").trim().toLowerCase();
+  const search = (req.query.search || "").trim().toLowerCase();
+  const start = req.query.start || "";
+  const end = req.query.end || "";
+  const download = req.query.download === "csv";
+
+  // Resolve range to UTC ISO for SQLite
+  const { fromUtc, toUtc } = rangeToUtc(range, tz, start, end);
+
+  // Build SQL
+  let sql = `
+    SELECT id, stylist_name, salon_id, status, created_at, scheduled_for, final_caption, image_url
+    FROM posts
+    WHERE salon_id = ?
+      AND datetime(created_at) BETWEEN datetime(?) AND datetime(?)
+  `;
+  const params = [salon_id, fromUtc, toUtc];
+
+  if (statusParam !== "all") {
+    sql += ` AND LOWER(status) = ?`;
+    params.push(statusParam);
+  }
+  if (stylist) {
+    sql += ` AND LOWER(stylist_name) LIKE ?`;
+    params.push(`%${stylist}%`);
+  }
+  if (search) {
+    sql += ` AND (LOWER(final_caption) LIKE ?)`;
+    params.push(`%${search}%`);
+  }
+
+  sql += ` ORDER BY datetime(created_at) DESC LIMIT 1000`;
+  const posts = db.prepare(sql).all(...params);
+
+  // CSV export with current filters
+  if (download && posts.length) {
+    const parser = new Parser();
+    const csv = parser.parse(posts);
+    res.header("Content-Type", "text/csv");
+    res.attachment(`mostlypostly_${salon_id}_posts.csv`);
+    return res.send(csv);
+  }
+
+  // Options
+  const rangeOptions = [
+    "All", "Today", "Yesterday", "This Week", "Last Week",
+    "This Month", "Last Month", "This Year", "Last Year", "Custom"
+  ];
+  const statusOptions = [
+    ["all", "All"],
+    ["manager_pending", "Manager Pending"],
+    ["approved", "Approved"],
+    ["queued", "Queued"],
+    ["published", "Published"],
+    ["denied", "Denied"],
+    ["failed", "Failed"],
+    ["cancelled", "Cancelled"],
+  ];
+
+  // Table rows
+  const rows = posts.map(p => `
+    <tr class="border-b border-zinc-800 hover:bg-zinc-900/60">
+      <td class="px-3 py-2 text-xs text-zinc-500">${p.id}</td>
+      <td class="px-3 py-2">${p.stylist_name || "—"}</td>
+      <td class="px-3 py-2"><span class="uppercase text-blue-400">${p.status}</span></td>
+      <td class="px-3 py-2 text-xs">${formatLocalTime(p.created_at, p.salon_id)}</td>
+      <td class="px-3 py-2 text-xs text-blue-300">${formatLocalTime(p.scheduled_for, p.salon_id)}</td>
+      <td class="px-3 py-2 text-xs max-w-xs truncate" title="${(p.final_caption || "").replace(/"/g, "&quot;")}">${(p.final_caption || "").substring(0, 140)}</td>
+    </tr>
+  `).join("\n");
+
+  // Filters UI
+  const filters = `
+    <form method="GET" class="mb-4 grid gap-3 md:grid-cols-6 items-end bg-zinc-900/60 border border-zinc-800 rounded-xl p-4">
+      <input type="hidden" name="salon" value="${salon_id}" />
+
+      <label class="text-sm text-zinc-300 md:col-span-2">Date Range
+        <select name="range" class="mt-1 w-full bg-zinc-800 border border-zinc-700 rounded text-zinc-200 p-2">
+          ${rangeOptions.map(opt => {
+            const val = opt.toLowerCase();
+            const sel = (val === range) ? "selected" : "";
+            return `<option value="${val}" ${sel}>${opt}</option>`;
+          }).join("")}
+        </select>
+      </label>
+
+      <label class="text-sm text-zinc-300">Start (custom)
+        <input type="datetime-local" name="start" value="${start}" class="mt-1 w-full bg-zinc-800 border border-zinc-700 rounded text-zinc-200 p-2" />
+      </label>
+
+      <label class="text-sm text-zinc-300">End (custom)
+        <input type="datetime-local" name="end" value="${end}" class="mt-1 w-full bg-zinc-800 border border-zinc-700 rounded text-zinc-200 p-2" />
+      </label>
+
+      <label class="text-sm text-zinc-300">Status
+        <select name="status" class="mt-1 w-full bg-zinc-800 border border-zinc-700 rounded text-zinc-200 p-2">
+          ${statusOptions.map(([val,label]) => `<option value="${val}" ${val===statusParam?"selected":""}>${label}</option>`).join("")}
+        </select>
+      </label>
+
+      <label class="text-sm text-zinc-300">Stylist
+        <input name="stylist" placeholder="e.g. Nicole" value="${(req.query.stylist||"")}" class="mt-1 w-full bg-zinc-800 border border-zinc-700 rounded text-zinc-200 p-2" />
+      </label>
+
+      <label class="text-sm text-zinc-300 md:col-span-2">Search text
+        <input name="search" placeholder="caption contains..." value="${(req.query.search||"")}" class="mt-1 w-full bg-zinc-800 border border-zinc-700 rounded text-zinc-200 p-2" />
+      </label>
+
+      <div class="md:col-span-4 flex gap-2">
+        <button class="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-white">Apply</button>
+        <a href="/dashboard?salon=${encodeURIComponent(salon_id)}" class="px-3 py-2 rounded bg-zinc-700 hover:bg-zinc-600 text-white">Reset</a>
+        <a href="/dashboard?salon=${encodeURIComponent(salon_id)}&range=${encodeURIComponent(range)}&status=${encodeURIComponent(statusParam)}&stylist=${encodeURIComponent(stylist)}&search=${encodeURIComponent(search)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&download=csv" class="ml-auto px-3 py-2 bg-zinc-800 hover:bg-blue-600 rounded text-sm text-zinc-300">⬇ CSV Export</a>
+      </div>
+    </form>
+  `;
+
+  const body = `
+    <section class="mb-6">
+      <h1 class="text-2xl font-bold mb-1">Database — <span class="text-blue-400">${salonName}</span></h1>
+      <p class="text-sm text-zinc-400 mb-4">All posts (filtered). Times shown in local timezone for this salon.</p>
+      ${filters}
+      <div class="overflow-x-auto border border-zinc-800 rounded-lg">
+        <table class="w-full text-sm border-collapse">
+          <thead class="bg-zinc-900 text-zinc-300 text-left">
+            <tr>
+              <th class="px-3 py-2">ID</th>
+              <th class="px-3 py-2">Stylist</th>
+              <th class="px-3 py-2">Status</th>
+              <th class="px-3 py-2">Created (local)</th>
+              <th class="px-3 py-2">Scheduled (local)</th>
+              <th class="px-3 py-2">Preview</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows || `<tr><td colspan="6" class="px-3 py-4 text-center text-zinc-500">No results</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+
+  res.send(pageShell({
+    title: `Database — ${salonName}`,
+    body,
+    current: "database",
+    salon_id
+  }));
+});
+
+export default router;

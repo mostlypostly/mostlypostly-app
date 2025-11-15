@@ -1,132 +1,82 @@
-// src/utils/moderation.js
-// Centralized moderation + sanitation helper for MostlyPostly
-
-/**
- * Replace or mask banned words in a string.
- * @param {string} str - Input text
- * @returns {string} - Cleaned text with flagged words replaced by ⚠️
- */
-
+// src/utils/moderation.js — MostlyPostly v1.1 (tenant-aware moderation)
+import OpenAI from "openai";
 import { createLogger } from "../utils/logHelper.js";
+import { logEvent, logModeration } from "../core/analyticsDb.js";
 
-const log = createLogger("app"); // or "scheduler", "moderation", etc.
-
+const openai = new OpenAI();
+const log = createLogger("moderation");
 
 export function sanitizeText(str = "") {
-  const bannedWords = [
-    "bitch", "fuck", "shit", "asshole", "slut", "hoe", "dick", "cock",
-    "pussy", "whore", "bastard", "cunt", "nude", "nsfw", "sexy",
-    "seductive", "sensual", "provocative", "erotic", "fetish"
+  const banned = [
+    "bitch","fuck","shit","asshole","slut","hoe","dick","cock","pussy","whore",
+    "bastard","cunt","nude","nsfw","sexy","seductive","sensual","provocative",
+    "erotic","fetish","killing","murder","suicide","hate"
   ];
-
-  let clean = str;
-  for (const w of bannedWords) {
-    const regex = new RegExp(`\\b${w}\\b`, "gi");
-    clean = clean.replace(regex, "⚠️");
+  let out = str;
+  for (const w of banned) {
+    const re = new RegExp(`\\b${w}\\b`, "gi");
+    out = out.replace(re, "⚠️");
   }
-  return clean;
+  return out;
 }
 
-/**
- * Check if content is safe for salon/spa public posting.
- * Blocks profanity, sexual content, hate speech, and disrespectful language.
- * @param {string} caption
- * @param {string[]} hashtags
- * @param {string} stylistInput
- * @returns {boolean} true if safe, false if blocked
- */
 export function isContentSafe(caption = "", hashtags = [], stylistInput = "") {
   const text = `${caption} ${hashtags.join(" ")} ${stylistInput}`.toLowerCase();
-
-  // 🚫 Hard block list
   const blocked = [
-    "nude", "nsfw", "erotic", "sex", "sexual", "fetish", "provocative",
-    "explicit", "onlyfans", "hot", "seductive", "pussy", "bitch", "fuck"
+    "nude","nsfw","erotic","sex","sexual","fetish","provocative",
+    "explicit","onlyfans","seductive","pussy","bitch","fuck","murder","suicide"
   ];
-  if (blocked.some((w) => text.includes(w))) return false;
-
-  // 🚫 Physical/body/appearance context
-  const offContext = [
-    "cleavage", "legs", "thigh", "body", "butt", "chest", "boobs", "abs",
-    "face", "smile", "eyes", "outfit", "attire", "clothes", "expression"
-  ];
-  if (offContext.some((w) => text.includes(w))) return false;
-
-  // 🚫 Disrespectful or harmful phrases
-  const disallowedPhrases = [
-    // Gendered or demographic insults
-    "stupid women", "stupid men", "ugly women", "ugly men",
-    "dumb women", "dumb men", "crazy women", "crazy men",
-    "lazy women", "lazy men", "old women", "old men",
-
-    // Against clients or guests
-    "stupid client", "dumb client", "annoying client",
-    "ugly client", "bad client", "idiot", "moron",
-
-    // Hate or violence
-    "racist", "sexist", "hate", "kill", "die", "suicide", "murder"
-  ];
-  if (disallowedPhrases.some((p) => text.includes(p))) return false;
-
-  // 🚫 Spammy emoji combos
-  if ((caption.match(/🔥|💋|🍑|🍆|💦|🍒|🩱|👙/g) ?? []).length > 2) return false;
-
+  const disallowed = ["racist","sexist","hate","kill","die","violence","weapon"];
+  const tokens = text.split(/\b/);
+  const bad = blocked.some(w => tokens.includes(w)) || disallowed.some(w => tokens.includes(w));
+  if (bad) return false;
+  if ((text.match(/🔥|💋|🍑|🍆|💦|🍒|🩱|👙/g) ?? []).length > 2) return false;
   return true;
 }
 
-/**
- * Run moderation on a full AI draft and return a safe version or block signal.
- * @param {object} aiJson - { caption, hashtags[], cta, image_url }
- * @param {string} stylistInput
- * @returns {{safe: boolean, result: object}}
- */
-/**
- * Moderate AI output for salon-safe content.
- * Returns { safe: boolean, result: object }
- */
-export function moderateAIOutput(aiJson, userText = "") {
+export default async function moderateAIOutput(aiJson, userText = "", meta = {}) {
+  const text = `${aiJson.caption || ""} ${userText || ""}`.trim();
+  const postId = meta?.post_id || null;
+  const salonId = meta?.salon_id || null;
+
   try {
-    // Mock moderation check — in production this could call OpenAI or another model
-    const text = `${aiJson.caption || ""} ${userText || ""}`.toLowerCase();
+    // local check
+    if (!isContentSafe(aiJson.caption, aiJson.hashtags || [], userText)) {
+      const reason = "static-check";
+      log("⚠️ Local moderation block:", { text });
+      logModeration({ post_id: postId || "preview", salon_id: salonId, level: "block", reasons: [reason] });
+      logEvent({ event: "post_flagged_local", salon_id: salonId, post_id: postId, data: { reason, text } });
+      return { safe: false, result: { ...aiJson, _meta: { type: "blocked-local", reason } } };
+    }
 
-    // 🚫 Words/phrases to block
-    const banned = [
-      "nsfw",
-      "nude",
-      "naked",
-      "sex",
-      "erotic",
-      "violence",
-      "blood",
-      "weapon",
-      "kill",
-      "suicide"
-    ];
+    const response = await openai.moderations.create({
+      model: "omni-moderation-latest",
+      input: text,
+    });
 
-    const found = banned.filter((w) => text.includes(w));
+    const result = response.results?.[0];
+    const flagged = result?.flagged || false;
+    const categories = result?.categories || {};
 
-    // 🧠 Decide safe/unsafe
-    if (found.length > 0) {
+    if (flagged) {
+      const triggered = Object.entries(categories)
+        .filter(([_, v]) => v === true)
+        .map(([k]) => k);
+      log("⚠️ AI moderation flagged:", { triggered });
+      logModeration({ post_id: postId || "preview", salon_id: salonId, level: "block", reasons: triggered });
+      logEvent({ event: "post_flagged_ai", salon_id: salonId, post_id: postId, data: { categories: triggered } });
       return {
         safe: false,
-        result: {
-          ...aiJson,
-          _meta: { type: "blocked", reasons: found }
-        }
+        result: { ...aiJson, _meta: { type: "blocked-ai", reasons: triggered } },
       };
     }
 
-    // ✅ Safe (no violations)
-    return {
-      safe: true,
-      result: {
-        ...aiJson,
-        _meta: { type: "approved", reasons: [] }
-      }
-    };
+    logEvent({ event: "post_moderation_passed", salon_id: salonId, post_id: postId, data: { categories } });
+    logModeration({ post_id: postId || "preview", salon_id: salonId, level: "info", reasons: ["pass"] });
+    return { safe: true, result: { ...aiJson, _meta: { type: "approved" } } };
   } catch (err) {
-    console.error("⚠️ [Moderation] Error:", err);
-    // ✅ Fail open (allow through) if moderation logic fails
-    return { safe: true, result: aiJson };
+    console.error("⚠️ [Moderation] Error:", err.message);
+    logEvent({ event: "post_moderation_error", salon_id: salonId, post_id: postId, data: { error: err.message } });
+    return { safe: true, result: { ...aiJson, _meta: { type: "error-fallback" } } };
   }
 }

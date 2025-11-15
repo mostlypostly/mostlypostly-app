@@ -1,135 +1,190 @@
-// server.js — MostlyPostly v3.4.3 (KISS: hot-reload endpoints + healthz + static /public)
-
+// =====================================================
+// Core imports (unchanged)
+// =====================================================
 import fs from "fs";
 import path from "path";
 import express from "express";
 import bodyParser from "body-parser";
 import twilio from "twilio";
 import dotenv from "dotenv";
+import "dotenv/config";
+import crypto from "crypto";
+import cookieParser from "cookie-parser";
 import fetch from "node-fetch";
 import http from "http";
 import { Server } from "socket.io";
-import "dotenv/config";
-import crypto from "crypto";
+import { createLogger } from "./src/utils/logHelper.js";
+import { lookupStylist } from "./src/core/salonLookup.js";
 
-import { db, saveDraft, getLatestDraft, savePost } from "./db.js";
+
+
+// =====================================================
+// DB FIRST — load SQLite and open connection
+// =====================================================
+import { db } from "./db.js";
+
+// =====================================================
+// LOAD SALONS + START WATCHER ***THIS IS HOW IT ORIGINALLY WORKED***
+// =====================================================
+import {
+  loadSalons,
+  startSalonWatcher,
+  getAllSalons,
+} from "./src/core/salonLookup.js";
+loadSalons();
+startSalonWatcher();
+
+// =====================================================
+// TENANT + SESSION MIDDLEWARES (must load before routes)
+// =====================================================
+import tenantFromLink from "./src/middleware/tenantFromLink.js";
+
+// =====================================================
+// SCHEMA INIT (AFTER DB + SALONS, BEFORE ANALYTICS & ROUTES)
+// =====================================================
+import { initSchemaHealth } from "./src/core/initSchemaHealth.js";
+initSchemaHealth();
+
+// =====================================================
+// ANALYTICS DB (AFTER schema exists, BEFORE routes)
+// =====================================================
+import "./src/core/analyticsDb.js";
+
+// =====================================================
+// CORE LOGIC LOAD (original order)
+// =====================================================
+import { composeFinalCaption } from "./src/core/composeFinalCaption.js";
+import {
+  handleJoinCommand,
+  continueJoinConversation,
+} from "./src/core/joinManager.js";
+import { joinSessions } from "./src/core/joinSessionStore.js";
+import { generateCaption } from "./src/openai.js";
+
+// =====================================================
+// ROUTES — MUST load AFTER salons + tenant middleware
+// =====================================================
 import dashboardRoute from "./src/routes/dashboard.js";
 import postsRoute from "./src/routes/posts.js";
 import analyticsRoute from "./src/routes/analytics.js";
-import * as formatters from "./formatters.js";
 import telegramRoute from "./src/routes/telegram.js";
 import twilioRoute from "./src/routes/twilio.js";
-import { parseNaturalAvailability } from "./src/core/timeParser.js";
-import {
-  getSalonAvailability,
-  injectAvailabilityIntoCaption,
-} from "./src/core/availabilityProvider.js";
-
-import { buildCombinedHashtags } from "./src/utils/hashtags.js";
-import { classifyPost } from "./src/core/postClassifier.js";
-
-import { enqueuePost, startScheduler } from "./src/scheduler.js";
 import analyticsSchedulerRoute from "./src/routes/analyticsScheduler.js";
+import managerRoute from "./src/routes/manager.js";
+import facebookAuthRoutes from "./src/routes/facebookAuth.js";
 
-import { fileURLToPath } from "url";
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// =====================================================
+// SCHEDULER — MUST BE LAST
+// =====================================================
+import { enqueuePost, startScheduler, runSchedulerOnce } from "./src/scheduler.js";
 
-// ✅ Serve /public/uploads as a truly public static directory
+// ------------------------------------------------------
+// END OF IMPORT BLOCK — EVERYTHING BELOW REMAINS AS-IS
+// ------------------------------------------------------
+
+
+// ------------------------------------------------------
+// 🚀 Initialize Express app
+// ------------------------------------------------------
+const app = express();
+
+// Mount analytics API after app exists
+app.use("/api", analyticsRoute);
+app.use(tenantFromLink());
+
+
+dotenv.config();
+const log = createLogger("app");
+
+// ------------------------------------------------------
+// 🧩 Middleware order (important!)
+// ------------------------------------------------------
+app.use(cookieParser()); // must be before routes for /manager auth
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
+
+// ------------------------------------------------------
+// 🌍 Public static assets (uploads, ok.txt, etc.)
+// ------------------------------------------------------
 app.use(
   "/uploads",
-  express.static(path.join(__dirname, "public/uploads"), {
-    setHeaders: (res, filePath) => {
-      if (filePath.endsWith(".jpg") || filePath.endsWith(".jpeg")) {
+  express.static(path.join(process.cwd(), "public/uploads"), {
+    setHeaders(res, filePath) {
+      if (/\.(jpg|jpeg)$/i.test(filePath))
         res.setHeader("Content-Type", "image/jpeg");
-      }
       res.setHeader("Cache-Control", "public, max-age=86400");
     },
   })
 );
 
+// ------------------------------------------------------
+// 🔌 Route mounting
+// ------------------------------------------------------
+app.use("/dashboard", dashboardRoute);
+app.use("/posts", postsRoute);
+app.use("/analytics", analyticsRoute);
+app.use("/telegram", telegramRoute);
+app.use("/twilio", twilioRoute);
+app.use("/analyticsScheduler", analyticsSchedulerRoute);
+app.use("/manager", managerRoute);
+app.use("/auth/facebook", facebookAuthRoutes);
 
-enqueuePost({
-  salon_id: "rejuve",
-  stylist: "Addie",
-  type: "stylist_portfolio",
-  platform: "instagram_feed",
-  payload: { caption: "Fresh fall balayage 🍂" }
+// ------------------------------------------------------
+// 💡 Health & basic endpoints
+// ------------------------------------------------------
+app.get("/healthz", (req, res) => {
+  res.status(200).json({ ok: true, status: "healthy" });
 });
 
+app.get("/", (req, res) => {
+  res.send("MostlyPostly API is running 🚀");
+});
+
+// ------------------------------------------------------
+// ---------
+// ------------------------------------------------------
+app.get("/scheduler/run-now", async (req, res) => {
+  const result = await runSchedulerOnce();
+  res.json(result);
+});
+
+// ------------------------------------------------------
+// 🗓️ Scheduler bootstrapping
+// ------------------------------------------------------
 startScheduler();
 
-const schedulerPolicy = JSON.parse(fs.readFileSync("./data/schedulerPolicy.json", "utf8"));
+// Scheduler policy (if needed)
+if (!fs.existsSync("./data")) fs.mkdirSync("./data", { recursive: true });
+let schedulerPolicy = {};
+try {
+  schedulerPolicy = JSON.parse(fs.readFileSync("./data/schedulerPolicy.json", "utf8"));
+} catch {
+  schedulerPolicy = {};
+}
 
+// 🔥 Salon watcher
+await loadSalons();
+startSalonWatcher();
 
-// 🔥 Hot-reloadable salons
-import {
-  loadSalons,
-  startSalonWatcher,
-  reloadSalonsNow,
-  getSalonSnapshot,
-  getSalonSettingFor,
-} from "./src/core/salonLookup.js";
+console.log("💇 Salons loaded and file watcher active.");
 
-// ✅ Unified caption composer (HTML/plain) + env brand tag
-import { composeFinalCaption } from "./src/core/composeFinalCaption.js";
-import { createLogger } from "./src/utils/logHelper.js";
-
-const log = createLogger("app"); // or "scheduler", "moderation", etc.
-
-dotenv.config();
-
-// Single source of truth for brand tag (configurable)
-// If you change this in CI/local env: export MOSTLYPOSTLY_BRAND_TAG="#YourBrand"
-const BRAND_TAG = process.env.MOSTLYPOSTLY_BRAND_TAG || "#MostlyPostly";
-
-// ======================================================
-// 🌍 Environment Check
-// ======================================================
-console.log("🌍 ENV CHECK:", {
-  TELEGRAM_BOT_TOKEN: !!process.env.TELEGRAM_BOT_TOKEN,
-  FACEBOOK_PAGE_ID: process.env.FACEBOOK_PAGE_ID,
-  FACEBOOK_PAGE_TOKEN: process.env.FACEBOOK_PAGE_TOKEN
-    ? process.env.FACEBOOK_PAGE_TOKEN.slice(0, 10) + "..."
-    : undefined,
+// Environment check
+console.log("🌍 Environment OK — Tokens Loaded:", {
+  TELEGRAM: !!process.env.TELEGRAM_BOT_TOKEN,
+  FB_PAGE: process.env.FACEBOOK_PAGE_ID || "unset",
+  FB_TOKEN: process.env.FACEBOOK_PAGE_TOKEN ? "✅ (truncated)" : "❌ missing",
 });
 
-// 👀 start watcher + initial load
-startSalonWatcher();
-await loadSalons(); // preload once (watcher will keep it fresh)
-
-const { MessagingResponse } = twilio.twiml;
-const app = express();
-const drafts = new Map();
-const joinSessions = new Map();
-
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(express.json());
-
-app.use("/analytics/scheduler", analyticsSchedulerRoute);
-
 // ======================================================
-// 📂 Static files: /public  (NEW - robust setup)
+// Public static files
 // ======================================================
 const PUBLIC_DIR = process.env.PUBLIC_DIR || path.join(process.cwd(), "public");
-
-// Ensure the folder exists
-if (!fs.existsSync(PUBLIC_DIR)) {
-  fs.mkdirSync(PUBLIC_DIR, { recursive: true });
-}
-
-// Drop a tiny ok.txt so you can hit /public/ok.txt right away
+if (!fs.existsSync(PUBLIC_DIR)) fs.mkdirSync(PUBLIC_DIR, { recursive: true });
 const okPath = path.join(PUBLIC_DIR, "ok.txt");
-if (!fs.existsSync(okPath)) {
-  try {
-    fs.writeFileSync(okPath, "ok\n");
-  } catch {}
-}
+if (!fs.existsSync(okPath)) fs.writeFileSync(okPath, "ok\n");
 
-console.log("🗂️  Serving /public from:", PUBLIC_DIR);
-// IMPORTANT: mount static BEFORE any catch-all routes
 app.use("/public", express.static(PUBLIC_DIR, {
-  // Helpful headers for images over ngrok
   setHeaders(res, filePath) {
     if (/\.(jpg|jpeg|png|gif|webp)$/i.test(filePath)) {
       res.setHeader("Cache-Control", "public, max-age=600");
@@ -138,22 +193,10 @@ app.use("/public", express.static(PUBLIC_DIR, {
 }));
 
 // ======================================================
-// Health / Admin
+// Health & Admin
 // ======================================================
-
-// Simple health probe for your host/monitoring
 app.get("/healthz", (_req, res) => res.status(200).send("ok"));
 
-// See what's currently loaded (names + require_manager_approval flag)
-app.get("/admin/salons", (_req, res) => {
-  try {
-    res.json(getSalonSnapshot());
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// Force a reload now (handy if watcher missed something)
 app.post("/admin/reload-salons", async (_req, res) => {
   try {
     const snap = await reloadSalonsNow();
@@ -163,73 +206,36 @@ app.post("/admin/reload-salons", async (_req, res) => {
   }
 });
 
-// Quickly read the live approval flag the router will use for a given chat_id/phone
-// Example: /admin/require-approval?id=8246265288
-app.get("/admin/require-approval", (req, res) => {
-  const id = req.query.id;
-  const val = !!getSalonSettingFor(id, "settings.require_manager_approval");
-  res.json({ id, require_manager_approval: val });
+app.get("/admin/salons", (_req, res) => {
+  try {
+    const salons = getAllSalons().map(s => ({
+      name: s.salon_info?.name,
+      city: s.salon_info?.city,
+      manager_approval: !!s.salon_info?.settings?.require_manager_approval,
+    }));
+    res.json({ ok: true, count: salons.length, salons });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // ======================================================
-// Brand Repos (unchanged)
+// Helpers
 // ======================================================
-const BRANDS_DIR = "./brands";
-const BRAND_REPOS = {
-  aveda: path.join(BRANDS_DIR, "aveda"),
-};
-
-// ======================================================
-// Multi-salon setup (legacy objects still here; routes use src/core now)
-// ======================================================
-const salonsDir = "./salons";
-const salons = {};
-
-function saveSalonFile(salonInfoName) {
-  const record = salons[salonInfoName];
-  if (!record) return;
-  const safeName = salonInfoName.toLowerCase().replace(/\s+/g, "");
-  const filePath = path.join(salonsDir, `${safeName}.json`);
-  fs.writeFileSync(filePath, JSON.stringify(record, null, 2));
-  console.log(`💾 Saved salon file: ${filePath}`);
+function normalizePhone(v = "") {
+  const digits = (v + "").replace(/\D+/g, "");
+  if (digits.startsWith("1") && digits.length === 11) return "+" + digits;
+  if (digits.length === 10) return "+1" + digits;
+  if (v.startsWith("+")) return v;
+  return "+" + digits;
 }
 
-// ======================================================
-/* Legacy lookupStylist shim (kept for Twilio route wiring).
-   Your production lookups should use src/core/salonLookup.js.
-*/
-function lookupStylist(identifier) {
-  for (const salonName in salons) {
-    const salonData = salons[salonName];
-    const stylist = salonData.stylists[identifier];
-    if (stylist) {
-      return {
-        stylist: {
-          ...stylist,
-          salon_name: salonData.salon_info.salon_name,
-          city: salonData.salon_info.city,
-          role: stylist.role || "stylist",
-          specialties: stylist.specialties || [],
-        },
-        salon: salonData.salon_info,
-      };
-    }
-  }
-  return null;
-}
-
-// ======================================================
-// Twilio image helper (unchanged)
-// ======================================================
 async function fetchTwilioImageAsBase64(url) {
-  console.log("📸 Fetching Twilio media securely...");
   const resp = await fetch(url, {
     headers: {
       Authorization:
         "Basic " +
-        Buffer.from(
-          `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
-        ).toString("base64"),
+        Buffer.from(`${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`).toString("base64"),
     },
   });
   if (!resp.ok) throw new Error(`Twilio image fetch failed: ${resp.status}`);
@@ -237,9 +243,6 @@ async function fetchTwilioImageAsBase64(url) {
   return `data:image/jpeg;base64,${Buffer.from(buffer).toString("base64")}`;
 }
 
-// ======================================================
-// Log Approved Posts (unchanged)
-// ======================================================
 function logApprovedPost(stylist, platformPosts, meta = {}) {
   const entry = {
     timestamp: new Date().toISOString(),
@@ -250,254 +253,83 @@ function logApprovedPost(stylist, platformPosts, meta = {}) {
     reasons: meta?.reasons || [],
     posts: platformPosts,
   };
-
   try {
     fs.appendFileSync("posts.log", JSON.stringify(entry, null, 2) + "\n\n");
-    console.log("🗂️ Logged approved post to posts.log");
   } catch (err) {
     console.error("⚠️ Failed to log post:", err);
   }
 }
 
 // ======================================================
-// 🧠 Improved AI Caption Generation (no hard-coded tags)
+// 🧩 JOIN (Manager onboarding + stylist creation)
 // ======================================================
-async function safeGenerateCaption(imageDataUrl, notes = "", city = "", ctx = {}) {
-  const { stylist = {}, salon = {} } = ctx;
-  const model = "gpt-4o-mini";
-  const stylistName = stylist?.stylist_name || "a stylist";
-  const instagramHandle = stylist?.instagram_handle || null;
-  const salonName = salon?.salon_name || "the salon";
-
-  const systemPrompt = `
-You are MostlyPostly, an AI assistant that writes social media captions for salons.
-- Use friendly, professional, and confident tone.
-- Vary sentence openings; do NOT always say “Our stylist has created”.
-- If available, include the stylist’s name or @handle.
-- Focus on the hair result (texture, tone, color, feel).
-- Keep it 2–3 sentences max.
-- End naturally with a booking invitation.
-Return only JSON like:
-{
-  "service_type": "...",
-  "caption": "...",
-  "hashtags": ["#..."],
-  "cta": "..."
-}
-`;
-
-  const userPrompt = `
-Salon: ${salonName} in ${city || "unknown city"}
-Stylist: ${stylistName}
-Instagram: ${instagramHandle ? "@" + instagramHandle : "N/A"}
-Notes: ${notes}
-Image URL: ${imageDataUrl ? "[binary]" : "no image provided"}
-`;
-
-  try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        temperature: 0.9,
-        messages: [
-          { role: "system", content: systemPrompt.trim() },
-          { role: "user", content: userPrompt.trim() },
-        ],
-      }),
-    });
-
-    const data = await response.json();
-    const raw = data?.choices?.[0]?.message?.content?.trim() || "";
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
-
-    return {
-      service_type: parsed?.service_type || "other",
-      caption:
-        parsed?.caption ||
-        `A fresh new look styled by ${instagramHandle ? "@" + instagramHandle : stylistName}.`,
-      // ✅ Only brand tag by default; NO location/salon hashtags here
-      hashtags: Array.isArray(parsed?.hashtags) && parsed.hashtags.length > 0 ? parsed.hashtags : [BRAND_TAG],
-      cta: parsed?.cta || "Book your next visit today!",
-    };
-  } catch (err) {
-    console.error("❌ AI caption failed:", err);
-    return {
-      service_type: "other",
-      caption: "A beautiful new look, ready to turn heads!",
-      hashtags: [BRAND_TAG], // ✅ brand-only fallback
-      cta: "Book your next visit today!",
-    };
-  }
-}
-
-// ======================================================
-// Express Routes (unchanged wiring)
-// ======================================================
-app.get("/status", (req, res) => res.json({ ok: true, version: "3.4.3" }));
-
-app.set("joinSessions", joinSessions);
-app.set("salons", salons);
-app.set("saveSalonFile", saveSalonFile);
-app.set("lookupStylist", lookupStylist);
-
-app.use(
-  "/inbound/telegram",
-  telegramRoute(drafts, lookupStylist, (img, notes, city, who) =>
-    safeGenerateCaption(img, notes, city, who)
-  )
-);
-app.use(
-  "/inbound/twilio",
-  twilioRoute(drafts, lookupStylist, (img, notes, city, who) =>
-    safeGenerateCaption(img, notes, city, who)
-  )
-);
-
-app.use("/dashboard", dashboardRoute(db));
-app.use("/posts", postsRoute(db));
-app.use("/analytics", analyticsRoute(db));
-
-// ======================================================
-// 🚀 Twilio Quick Tester (JOIN + Photo Flow) — Hardened Core Flow + File Logging
-// ======================================================
-
-const LOGS_DIR = path.join(process.cwd(), "logs");
-if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, { recursive: true });
-const APP_LOG = path.join(LOGS_DIR, "app.log");
-
-function writeLog(entry) {
-  const line = JSON.stringify(entry) + "\n";
-  fs.appendFile(APP_LOG, line, (err) => {
-    if (err) console.error("⚠️ log write failed:", err.message);
-  });
-}
-
-app.post("/inbound/twilio", async (req, res) => {
-  const { MessagingResponse } = twilio.twiml;
-  const twiml = new MessagingResponse();
-  const start = Date.now();
-  const SLA_MS = 10000;
-  const id = crypto.randomUUID();
-
-  const log = (event, data = {}) => {
-    const entry = { t: new Date().toISOString(), id, event, ...data };
-    console.log(JSON.stringify(entry));
-    writeLog(entry);
+app.post("/inbound/join", async (req, res) => {
+  const from = req.body.From || req.body.chat_id;
+  const text = (req.body.Body || req.body.text || "").trim();
+  const sendMessage = async (to, message) => {
+    console.log(`📩 [JOIN MSG to ${to}] ${message}`);
+    // In production you’d send this via Twilio or Telegram
   };
 
-  try {
-    const from = req.body.From;
-    const body = (req.body.Body || "").trim();
-    const numMedia = parseInt(req.body.NumMedia || "0", 10);
-
-    // --- JOIN setup
-    if (/^JOIN\\b/i.test(body)) {
-      const msg = await startJoinFlow({ chatId: from, joinSessions });
-      twiml.message(msg);
-      log("JOIN_START", { from });
-      return res.type("text/xml").send(twiml.toString());
-    }
-
-    if (isJoinInProgress({ chatId: from, joinSessions })) {
-      const { message, done, salonNameAdded } = await handleJoinInput({
-        chatId: from,
-        text: body,
-        joinSessions,
-        salons,
-        saveSalonFile,
-      });
-      twiml.message(message);
-      if (done) log("JOIN_DONE", { salonNameAdded });
-      return res.type("text/xml").send(twiml.toString());
-    }
-
-    const result = lookupStylist(from);
-    const stylist = result?.stylist;
-    const salonInfo = result?.salon;
-
-    // --- APPROVE
-    if (/^APPROVE\\b/i.test(body)) {
-      const draft = drafts.get(from);
-      if (!draft) {
-        twiml.message("No draft to approve. Send a photo first.");
-      } else {
-        const ig = formatters.formatInstagramPost(draft, stylist, salonInfo);
-        const fb = formatters.formatFacebookPost(draft, stylist, salonInfo);
-        const x = formatters.formatXPost(draft, stylist, salonInfo);
-        logApprovedPost(stylist, { ig, fb, x }, draft._meta);
-        savePost(from, stylist, ig, fb, x);
-        drafts.delete(from);
-        twiml.message("✅ Approved! Your post is ready.\n\n" + ig);
-      }
-      log("POST_APPROVED", { stylist: stylist?.stylist_name });
-      return res.type("text/xml").send(twiml.toString());
-    }
-
-    // --- No image
-    if (numMedia === 0) {
-      twiml.message(
-        "I didn’t get a photo. Please send a clear image and optional note.\n\nCommands: APPROVE, EDIT <text>, OPTIONS, RESET."
-      );
-      log("NO_MEDIA", { from });
-      return res.type("text/xml").send(twiml.toString());
-    }
-
-    // --- Fetch & AI
-    const mediaUrl = req.body[`MediaUrl${numMedia - 1}`];
-    const base64 = await fetchTwilioImageAsBase64(mediaUrl);
-
-    let aiJson;
-    try {
-      aiJson = await safeGenerateCaption(base64, body, stylist?.city, { stylist, salon: salonInfo });
-    } catch (err) {
-      log("AI_ERROR", { err: err.message });
-      twiml.message("⚠️ I'm having trouble generating your preview. Try again shortly.");
-      return res.type("text/xml").send(twiml.toString());
-    }
-
-    if (!aiJson.caption || !Array.isArray(aiJson.hashtags) || !aiJson.cta) {
-      log("AI_SCHEMA_FAIL", { aiJson });
-      twiml.message("⚠️ Caption came back incomplete. Please resend your photo.");
-      return res.type("text/xml").send(twiml.toString());
-    }
-
-    // --- Save + Preview
-    drafts.set(from, aiJson);
-    saveDraft(from, stylist, aiJson);
-
-    const previewText = composeFinalCaption({
-      caption: aiJson.caption,
-      hashtags: aiJson.hashtags,
-      cta: aiJson.cta,
-      instagramHandle: stylist?.instagram_handle,
-      stylistName: stylist?.stylist_name,
-      bookingUrl: "",
-      salon: { salon_info: salonInfo },
-      asHtml: false,
-    });
-
-    const preview = `💇‍♀️ MostlyPostly Preview\\n\\n${previewText}\\n\\nReply APPROVE to post.`;
-    twiml.message(preview);
-    log("PREVIEW_SENT", { elapsed: Date.now() - start });
-
-    if (Date.now() - start > SLA_MS) log("SLA_WARN", { ms: Date.now() - start });
-    return res.type("text/xml").send(twiml.toString());
-  } catch (err) {
-    const twimlErr = new twilio.twiml.MessagingResponse();
-    twimlErr.message("⚠️ Something went wrong. Please resend your last photo.");
-    writeLog({ t: new Date().toISOString(), id, event: "UNHANDLED", error: err.message });
-    return res.type("text/xml").send(twimlErr.toString());
+  // Handle new join start
+  if (/^JOIN\b/i.test(text)) {
+    await handleJoinCommand(from, lookupStylist, text, sendMessage);
+    return res.json({ ok: true, action: "start" });
   }
+
+  // Continue join conversation if already started
+  if (joinSessions.has(from)) {
+    const result = await continueJoinConversation(from, text, sendMessage);
+    return res.json({ ok: true, action: result.done ? "complete" : "continue" });
+  }
+
+  res.json({ ok: false, message: "No active join session." });
 });
 
 // ======================================================
-// Socket.IO for dashboard (unchanged)
+// Express Routes
+// ======================================================
+const drafts = new Map();
+
+app.use("/analytics/scheduler", analyticsSchedulerRoute);
+
+app.use(
+  "/inbound/telegram",
+  telegramRoute(drafts, lookupStylist, ({ imageUrl, notes, stylist, salon }) =>
+    generateCaption({
+      imageDataUrl: imageUrl,
+      notes,
+      salon,
+      stylist,
+      city: stylist?.city || ""
+    })
+  )
+);
+
+app.use(
+  "/inbound/twilio",
+  twilioRoute(drafts, lookupStylist, ({ imageUrl, notes, stylist, salon }) =>
+    generateCaption({
+      imageDataUrl: imageUrl,
+      notes,
+      salon,
+      stylist,
+      city: stylist?.city || ""
+    })
+  )
+);
+
+app.use("/dashboard", dashboardRoute);
+app.use("/posts", postsRoute);
+app.use("/analytics", analyticsRoute);
+
+app.get("/", (_req, res) =>
+  res.send("✅ MostlyPostly is running! Use /dashboard or /status to check system health.")
+);
+app.get("/status", (_req, res) => res.json({ ok: true, version: "3.4.3" }));
+
+// ======================================================
+// Socket.IO for dashboard
 // ======================================================
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
@@ -508,16 +340,12 @@ io.on("connection", (s) => {
   s.on("disconnect", () => console.log("🔴 Dashboard disconnected:", s.id));
 });
 
-// Simple home route for Render root URL
-app.get("/", (req, res) => {
-  res.send("✅ MostlyPostly is running! Use /dashboard or /status to check system health.");
-});
-
 // ======================================================
-// 🚀 Start
+// Start Server
 // ======================================================
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`✅ MostlyPostly running on http://localhost:${PORT}`);
-  console.log(`🔎 Try: http://localhost:${PORT}/public/ok.txt`);
+ console.log(`🚀 MostlyPostly ready on http://localhost:${PORT}`);
+ console.log("💡 Health check:", `http://localhost:${PORT}/healthz`);
+ console.log("💇 Public uploads:", `http://localhost:${PORT}/uploads/`);
 });

@@ -1,4 +1,4 @@
-// src/core/salonLookup.js — Updated for modular salon JSON
+// src/core/salonLookup.js — Fully patched for consistent lookup and consent updates
 import fs from "fs";
 import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
@@ -11,6 +11,14 @@ let cachedSalons = [];
 let lastLoadedAt = null;
 let reloadTimer = null;
 let watcherStarted = false;
+
+export function getSalonById(salonId) {
+  if (!salonId) return null;
+  const id = String(salonId).trim().toLowerCase();
+  return cachedSalons.find(
+    (s) => String(s.salon_id).trim().toLowerCase() === id
+  ) || null;
+}
 
 function resolveSalonsDir() {
   const candidates = [];
@@ -47,10 +55,8 @@ export async function loadSalons() {
       return cachedSalons;
     }
 
-    const entries = fs.readdirSync(dir);
-    const files = entries
-      .filter((f) => f.endsWith(".json") || f.endsWith(".js"))
-      .map((f) => path.join(dir, f));
+    const files = fs.readdirSync(dir).filter(f => f.endsWith(".json") || f.endsWith(".js"))
+      .map(f => path.join(dir, f));
 
     const salons = [];
     for (const filePath of files) {
@@ -66,13 +72,7 @@ export async function loadSalons() {
 
     cachedSalons = salons;
     lastLoadedAt = new Date();
-
-    console.log(`✅ Loaded ${cachedSalons.length} salon(s) from ${dir}`);
-    cachedSalons.forEach((s) =>
-      console.log(
-        `   • ${s.salon_info?.name || s.salon_info?.salon_name} (require_manager_approval=${!!s.settings?.require_manager_approval})`
-      )
-    );
+    console.log(`✅ Loaded ${salons.length} salon(s)`);
     return cachedSalons;
   } catch (err) {
     console.error("🚫 Failed to load salons:", err);
@@ -113,94 +113,9 @@ export function startSalonWatcher() {
   console.log(`👀 Watching ${pattern} for salon changes…`);
 }
 
-// --- 🔎 Stylist / Manager lookup (updated)
-export function lookupStylist(identifier) {
-  if (!cachedSalons.length) {
-    console.warn("⚠️ Salon cache empty — call loadSalons() first.");
-    return null;
-  }
-  const idStr = String(identifier).trim();
-
-  for (const salon of cachedSalons) {
-    const salonInfo = salon.salon_info || {};
-    const stylists = salon.stylists || [];
-    const managers = salon.managers || [];
-
-    // --- Try stylist match
-    const stylist = stylists.find((s) => {
-      const chat = String(s.chat_id || "").trim();
-      const phone = String(s.phone || "").trim();
-      const id = String(s.id || "").trim();
-      return chat === idStr || phone === idStr || id === idStr;
-    });
-
-    if (stylist) {
-      return {
-        ...stylist,
-        stylist_name: stylist.name || stylist.stylist_name || "Unknown",
-        salon_name: salonInfo.name || salonInfo.salon_name || "Unknown",
-        city: salonInfo.city || "Unknown",
-        salon_id: salon.salon_id || null,
-        booking_url: salonInfo.booking_url || null,
-        role: "stylist",
-        salon_info: salonInfo,
-      };
-    }
-
-    // --- Try manager match
-    const manager = managers.find((m) => {
-      const chat = String(m.chat_id || "").trim();
-      const phone = String(m.phone || "").trim();
-      const id = String(m.id || "").trim();
-      return chat === idStr || phone === idStr || id === idStr;
-    });
-
-    if (manager) {
-      return {
-        ...manager,
-        stylist_name: manager.name || manager.stylist_name || "Unknown",
-        salon_name: salonInfo.name || salonInfo.salon_name || "Unknown",
-        city: salonInfo.city || "Unknown",
-        salon_id: salon.salon_id || null,
-        booking_url: salonInfo.booking_url || null,
-        role: "manager",
-        salon_info: salonInfo,
-      };
-    }
-  }
-
-  return null;
+export function getAllSalons() {
+  return cachedSalons;
 }
-
-export function lookupManager(identifier) {
-  // Use the same cachedSalons array already managed by loadSalons()
-  const salons = getAllSalons ? getAllSalons() : cachedSalons || [];
-  if (!salons.length) {
-    console.warn("⚠️ No salons loaded when calling lookupManager()");
-    return null;
-  }
-
-  const idStr = String(identifier).trim();
-
-  for (const salon of salons) {
-    const managers = salon.managers || [];
-    for (const manager of managers) {
-      const chat = String(manager.chat_id || "").trim();
-      const phone = String(manager.phone || "").trim();
-      const id = String(manager.id || "").trim();
-      if (chat === idStr || phone === idStr || id === idStr) {
-        return {
-          ...manager,
-          salon_id: salon.salon_id || null,
-          salon_info: salon.salon_info || {},
-        };
-      }
-    }
-  }
-
-  return null;
-}
-
 
 export function getSalonByStylist(identifier) {
   if (!cachedSalons.length) return null;
@@ -213,13 +128,13 @@ export function getSalonByStylist(identifier) {
       stylists.some(
         (s) =>
           String(s.chat_id).trim() === idStr ||
-          String(s.phone).trim() === idStr ||
+          normalizePhone(s.phone) === normalizePhone(idStr) ||
           s.id === idStr
       ) ||
       managers.some(
         (m) =>
           String(m.chat_id).trim() === idStr ||
-          String(m.phone).trim() === idStr ||
+          normalizePhone(m.phone) === normalizePhone(idStr) ||
           m.id === idStr
       )
     ) {
@@ -229,27 +144,155 @@ export function getSalonByStylist(identifier) {
   return null;
 }
 
-export function getAllSalons() {
-  return cachedSalons;
+// 🔍 Core stylist lookup (cached, safe)
+export function lookupStylist(identifier) {
+  const idStr = String(identifier || "").trim();
+  if (!idStr) return null;
+
+  // Auto-load cache if empty
+  if (!cachedSalons.length) {
+    console.warn("⚠️ Salon cache empty — loading salons now…");
+    try {
+      loadSalons();
+    } catch (e) {
+      console.error("🚫 Failed to auto-load salons:", e);
+      return null;
+    }
+  }
+
+  const normalizedId = normalizePhone(idStr);
+
+  for (const salon of cachedSalons) {
+    const salonInfo = salon.salon_info || {};
+    const stylists = salon.stylists || [];
+    const managers = salon.managers || [];
+
+    // Match stylist
+    const stylist = stylists.find(
+      (s) =>
+        normalizePhone(s.phone) === normalizedId ||
+        String(s.chat_id).trim() === idStr ||
+        s.id === idStr
+    );
+    if (stylist) {
+      stylist.salon_info = salonInfo;
+      stylist.salon_name = salonInfo.name || salonInfo.salon_name || "Unknown Salon";
+      stylist.display_name = stylist.name || stylist.stylist_name;
+      return { stylist, salon };
+    }
+
+    // Match manager
+    const manager = managers.find(
+      (m) =>
+        normalizePhone(m.phone) === normalizedId ||
+        String(m.chat_id).trim() === idStr ||
+        m.id === idStr
+    );
+    if (manager) {
+      manager.salon_info = salonInfo;
+      manager.salon_name = salonInfo.name || salonInfo.salon_name || "Unknown Salon";
+      manager.display_name = manager.name || manager.stylist_name;
+      manager.role = "manager";
+      return { stylist: manager, salon };
+    }
+  }
+
+  console.warn(`⚠️ No stylist or manager found for ${idStr}`);
+  return null;
 }
 
-export function getSalonSnapshot() {
-  return {
-    lastLoadedAt,
-    salons: cachedSalons.map((s) => ({
-      salon_name: s.salon_info?.name || s.salon_info?.salon_name,
-      require_manager_approval: !!s.settings?.require_manager_approval,
-      file_hint: s.__file,
-    })),
-  };
+/**
+ * 🔍 Guaranteed direct lookup — loads salon files on demand (bypasses cache)
+ */
+export function findStylistDirect(phone) {
+  if (!phone) return null;
+  const normalized = normalizePhone(phone);
+  const salonsDir = resolveSalonsDir();
+  const files = fs.readdirSync(salonsDir).filter(f => f.endsWith(".json"));
+
+  for (const file of files) {
+    try {
+      const salonPath = path.join(salonsDir, file);
+      const salon = JSON.parse(fs.readFileSync(salonPath, "utf8"));
+      const salonInfo = salon.salon_info || {};
+      const allPeople = [...(salon.managers || []), ...(salon.stylists || [])];
+
+      for (const person of allPeople) {
+        if (normalizePhone(person.phone) === normalized) {
+          return { stylist: person, salon };
+        }
+      }
+    } catch (err) {
+      console.warn(`⚠️ Failed to read salon file ${file}:`, err.message);
+    }
+  }
+  return null;
 }
 
-export function getSalonSettingFor(identifier, key) {
-  const salon = getSalonByStylist(identifier);
-  if (!salon) return undefined;
-  return key.split(".").reduce((acc, k) => (acc ? acc[k] : undefined), salon);
+// 🧩 Normalize phone numbers consistently
+function normalizePhone(v = "") {
+  const digits = (v + "").replace(/\D+/g, "");
+  if (digits.startsWith("1") && digits.length === 11) return "+" + digits;
+  if (digits.length === 10) return "+1" + digits;
+  if (v.startsWith("+")) return v;
+  return "+" + digits;
+}
+
+/**
+ * updateStylistConsent(phoneOrChatId)
+ * -----------------------------------
+ * Finds the stylist by phone/chat ID and updates SMS consent.
+ */
+export function updateStylistConsent(phoneOrChatId) {
+  if (!phoneOrChatId) return { ok: false, error: "No identifier provided" };
+  const idStr = String(phoneOrChatId).trim();
+  const clean = normalizePhone(idStr);
+
+  const salons = getAllSalons();
+  if (!salons.length) return { ok: false, error: "No salons loaded" };
+
+  for (const salon of salons) {
+    const salonFile = salon.__file || "";
+    const allPeople = [...(salon.stylists || []), ...(salon.managers || [])];
+
+    const match = allPeople.find(
+      (p) =>
+        normalizePhone(p.phone) === clean || String(p.chat_id).trim() === idStr
+    );
+
+    if (match) {
+      const now = new Date().toISOString();
+      match.consent = match.consent || {};
+      match.consent.sms_opt_in = true;
+      match.consent.timestamp = now;
+      match.compliance_opt_in = true;
+      match.compliance_timestamp = now;
+
+      try {
+        fs.writeFileSync(salonFile, JSON.stringify(salon, null, 2));
+        console.log(`✅ Updated SMS consent for ${match.name || match.stylist_name} (${clean})`);
+        return {
+          ok: true,
+          stylist_name: match.name || match.stylist_name,
+          salon_name: salon.salon_info?.name || "Unknown",
+        };
+      } catch (err) {
+        console.error("⚠️ Failed to save consent:", err);
+        return { ok: false, error: err.message };
+      }
+    }
+  }
+
+  return { ok: false, error: "Stylist not found" };
 }
 
 export function reloadSalonsNow() {
-  return loadSalons().then(() => getSalonSnapshot());
+  return loadSalons().then(() => ({
+    lastLoadedAt,
+    salons: cachedSalons.map((s) => ({
+      salon_name: s.salon_info?.name,
+      require_manager_approval: !!s.settings?.require_manager_approval,
+      file_hint: s.__file,
+    })),
+  }));
 }

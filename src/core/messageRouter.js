@@ -1,5 +1,45 @@
 // src/core/messageRouter.js
 // MostlyPostly v0.5.15 — FB vs IG "Styled by" rules + IG rehost + consent + formatting
+// --- top of messageRouter.js ---
+import crypto from "crypto";
+import { db, verifyTokenRow } from "../../db.js";  // ✅ single import (no duplicates)
+
+// --- Ensure manager_tokens table exists (runs only once safely) ---
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS manager_tokens (
+    token TEXT PRIMARY KEY,
+    salon_id TEXT,
+    manager_phone TEXT,
+    expires_at TEXT
+  )
+`).run();
+
+// --- Issue & verify token ---
+export function issueManagerToken(salon_id, manager_phone) {
+  const token = crypto.randomBytes(16).toString("hex");
+  const expires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  try {
+    const insert = db.prepare(`
+      INSERT OR REPLACE INTO manager_tokens (token, salon_id, manager_phone, expires_at)
+      VALUES (?, ?, ?, ?)
+    `);
+    insert.run(token, salon_id || "unknown", manager_phone || "unknown", expires);
+
+    // ✅ Verify on the same connection
+    const verify = verifyTokenRow(token);
+    if (verify && verify.token === token) {
+      console.log("✅ Token verified and visible immediately:", verify);
+    } else {
+      console.warn("⚠️ Token not visible immediately (should not happen with Better-SQLite3).");
+    }
+
+    return token;
+  } catch (err) {
+    console.error("❌ Failed to insert or verify token:", err.message);
+    return null;
+  }
+}
 
 import { publishToFacebook } from "../publishers/facebook.js";
 import { publishToInstagram } from "../publishers/instagram.js";
@@ -18,6 +58,11 @@ import {
   saveStylistConsent,
 } from "../core/storage.js";
 import { composeFinalCaption } from "./composeFinalCaption.js";
+// 🧠 Import moderation utility directly
+import moderateAIOutput from "../utils/moderation.js";
+import { rehostTwilioMedia } from "../utils/rehostTwilioMedia.js";
+console.log("[Router Debug] moderateAIOutput type:", typeof moderateAIOutput);
+
 
 // --------------------------------------
 // Resolve a usable image URL from records
@@ -180,12 +225,30 @@ function removeIGUrlLine(caption) {
   return lines.join("\n");
 }
 
-// Build final per-network captions
 function buildFacebookCaption(baseCaption, stylistName, igHandle) {
+  const FB_SPACER = "\u200B";
+
   let c = enforceCreditName(baseCaption, stylistName); // "Styled by Full Name"
-  c = insertIGUnderStyledBy(c, igHandle);              // add IG URL under it
-  return prettifyBody(c);
+  c = insertIGUnderStyledBy(c, igHandle);              // IG URL directly under Styled by
+  c = prettifyBody(c);                                  // normalize sections/collapses
+
+  // Convert any blank lines into FB-safe spacer lines
+  const lines = c.split("\n");
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    if (ln.trim() === "") {
+      // Use spacer so Facebook preserves the blank line visually
+      // Also dedupe consecutive blank/spacer lines to a single spacer
+      if (out.length && out[out.length - 1] !== FB_SPACER) out.push(FB_SPACER);
+    } else {
+      out.push(ln);
+    }
+  }
+
+  return out.join("\n").trim();
 }
+
 function buildInstagramCaption(baseCaption, stylistName, igHandle) {
   const handle = (igHandle || "").replace(/^@+/, "");
   let c;
@@ -355,49 +418,66 @@ Reply "APPROVE" to post or "DENY" to reject.
 // New image → AI → store draft → preview to stylist
 async function processNewImageFlow({
   chatId, text, imageUrl, drafts,
-  safeGenerateCaption, moderateAIOutput, sendMessage,
+  generateCaption, moderateAIOutput, sendMessage,
   stylist, salon
 }) {
   console.log("📸 [Router] New image received (consented):", imageUrl);
 
-  const aiJson = await safeGenerateCaption(imageUrl, text || "", stylist?.city || "", stylist);
+  // 1️⃣ Generate AI caption object
+    const aiJson = await generateCaption({
+    imageDataUrl: imageUrl,
+    notes: text || "",
+    salon,
+    stylist,
+    city: stylist?.city || ""
+  });
+
   aiJson.image_url = imageUrl;
   aiJson.original_notes = text;
 
-  const { safe, result } = moderateAIOutput(aiJson, text);
+  // 2️⃣ Extract the caption for moderation
+  const aiCaption = aiJson.caption || aiJson.text || "";
+
+  // 3️⃣ Run moderation check
+  const moderation = await moderateAIOutput({ caption: aiCaption }, text);
+  const safe = moderation.safe !== false;
+
   if (!safe) {
     await sendMessage.sendText(chatId, "⚠️ This caption or note was flagged. Please resend a different photo.");
     drafts.delete(chatId);
     return;
   }
 
+  // 4️⃣ Build the final caption and stylist preview
   const bookingUrl = salon?.salon_info?.booking_url || "";
   const stylistName = getStylistName(stylist);
   const stylistHandle = getStylistHandle(stylist);
 
-  let baseCaption = composeFinalCaption({
-    caption: result.caption,
-    hashtags: result.hashtags,
-    cta: result.cta,
+  const baseCaption = composeFinalCaption({
+    caption: aiJson.caption,
+    hashtags: aiJson.hashtags,
+    cta: aiJson.cta,
     instagramHandle: null,
     stylistName,
     bookingUrl,
     salon,
-    asHtml: false
+    asHtml: false,
   });
 
   // Stylist preview remains FB-style (name + IG URL under it)
   const previewCaption = buildFacebookCaption(baseCaption, stylistName, stylistHandle);
 
-  drafts.set(chatId, { ...result, final_caption: previewCaption, base_caption: baseCaption });
+  // Save draft
+  drafts.set(chatId, { ...aiJson, final_caption: previewCaption, base_caption: baseCaption });
 
+  // 5️⃣ Send stylist preview
   const preview = `
-💇‍♀️ *MostlyPostly Preview (Full Post)*
+  💇‍♀️ *MostlyPostly Preview (Full Post)*
 
-${previewCaption}
+  ${previewCaption}
 
-Reply *APPROVE* to continue, *REGENERATE*, or *CANCEL* to stop.
-`.trim();
+  Reply *APPROVE* to continue, *REGENERATE*, or *CANCEL* to stop.
+  `.trim();
 
   await sendMessage.sendText(chatId, preview);
 }
@@ -410,7 +490,7 @@ export async function handleIncomingMessage({
   text,
   imageUrl,
   drafts,
-  safeGenerateCaption,
+  generateCaption,
   moderateAIOutput,
   sendMessage,
   io
@@ -421,36 +501,61 @@ export async function handleIncomingMessage({
   const cleanText = (text || "").trim();
   const command = cleanText.toUpperCase();
 
-  // Identify who is talking
-  const stylist =
-    lookupStylist(chatId) || {
-      stylist_name: "Guest User",
-      salon_name: "Unknown",
-      city: "Unknown",
-      role: "stylist"
-    };
+  // 🔍 Lookup stylist + salon in one pass
+  const lookupResult = lookupStylist(chatId);
+  const stylist = lookupResult?.stylist || {
+    stylist_name: "Guest User",
+    salon_name: "Unknown",
+    city: "Unknown",
+    role: "stylist"
+  };
 
-    // Also try manager lookup (used for consent handling)
-const manager = stylist?.role === "manager" ? stylist : null;
-const hasConsent =
-  stylist?.compliance_opt_in ||
-  stylist?.consent?.sms_opt_in ||
-  manager?.compliance_opt_in ||
-  manager?.consent?.sms_opt_in;
+  const salon = lookupResult?.salon || null;
 
+  // Also try manager lookup (used for consent handling)
+  const manager = stylist?.role === "manager" ? stylist : null;
+  const hasConsent =
+    stylist?.compliance_opt_in ||
+    stylist?.consent?.sms_opt_in ||
+    manager?.compliance_opt_in ||
+    manager?.consent?.sms_opt_in;
 
   const role = stylist.role?.toLowerCase() || "stylist";
-  console.log(`${role === "manager" ? "👔 Manager" : "💇 Stylist"} resolved: ${getStylistName(stylist)} @ ${stylist.salon_name}`);
+  console.log(
+    `${role === "manager" ? "👔 Manager" : "💇 Stylist"} resolved: ${
+      getStylistName(stylist)
+    } @ ${salon?.salon_info?.name || stylist.salon_name || "Unknown Salon"}`
+  );
 
-  // Get the salon (with retry if cache was empty)
-  let salon = getSalonByStylist(chatId);
-  if (!salon) {
-    console.warn(`⚠️ No salon match for ${chatId}. Reloading cache...`);
-    await loadSalons();
-    salon = getSalonByStylist(chatId);
+  // ✅ Validate user and consent before continuing
+  if (!stylist || stylist.salon_name === "Unknown" || !stylist.salon_info) {
+    await sendMessage.sendText(
+      chatId,
+      "🚫 You’re not registered with any salon. Please contact your salon manager to be added to MostlyPostly before posting."
+    );
+    endTimer(start);
+    return;
   }
+
   if (!salon) {
-    await sendMessage.sendText(chatId, "⚠️ Your salon is not properly linked in MostlyPostly. Please contact your manager.");
+    await sendMessage.sendText(
+      chatId,
+      "⚠️ Your salon is not properly linked in MostlyPostly. Please contact your manager."
+    );
+    endTimer(start);
+    return;
+  }
+
+  // 🧾 Enforce salon-level consent policy
+  const salonRequiresConsent = !!salon?.salon_info?.compliance?.stylist_sms_consent_required;
+  const stylistOptedIn =
+    stylist?.compliance_opt_in === true ||
+    stylist?.consent?.sms_opt_in === true;
+
+  // If salon requires consent but stylist hasn't agreed yet → block
+  if (salonRequiresConsent && !stylistOptedIn) {
+    console.warn(`⚠️ Consent required for ${stylist.name || stylist.stylist_name} @ ${salon.salon_info?.name}`);
+    await queueConsentAndPrompt(chatId, imageUrl, text, sendMessage, stylist);
     endTimer(start);
     return;
   }
@@ -495,12 +600,13 @@ const hasConsent =
         text: queued.text,
         imageUrl: queued.imageUrl,
         drafts,
-        safeGenerateCaption,
+        generateCaption,
         moderateAIOutput,
         sendMessage,
         stylist,
         salon: getSalonByStylist(chatId) || salon
       });
+
       consentSessions.set(chatId, { status: "granted" });
       endTimer(start);
       return;
@@ -564,79 +670,116 @@ const hasConsent =
       salon,
       asHtml: false
     });
+      if (requiresManager) {
+        console.log(`🕓 [Router] Manager approval required for ${stylistName}`);
+        console.log("👔 Manager loaded for approval:", manager?.name, manager?.phone, manager?.chat_id);
 
-    if (requiresManager && manager && role !== "manager") {
-      console.log(`🕓 [Router] Manager approval required for ${stylistName}`);
+        const stylistWithManager = {
+          ...stylist,
+          manager_phone: manager?.phone || null,
+          manager_chat_id: manager?.chat_id ?? null,
+          image_url: draft.image_url || null,
+          final_caption: buildFacebookCaption(baseCaption, stylistName, stylistHandle),
+          booking_url: bookingUrl,
+          instagram_handle: stylistHandle
+        };
 
-      const stylistWithManager = {
-        ...stylist,
-        manager_phone: manager?.phone || null,
-        manager_chat_id: manager?.chat_id ?? null,
-        image_url: draft.image_url || null,
-        final_caption: buildFacebookCaption(baseCaption, stylistName, stylistHandle), // preview style
-        booking_url: bookingUrl,
-        instagram_handle: stylistHandle
-      };
+        // ✅ Save post with stylist_name and salon_id populated
+        const pendingPost = await savePost(
+          chatId,
+          {
+            ...stylistWithManager,
+            stylist_name: stylistName || "Unknown Stylist",
+            salon_id: salon?.salon_id || salon?.id || salon?.salon_info?.id || "unknown",
+          },
+          draft.caption,
+          draft.hashtags || [],
+          "manager_pending",
+          io,
+          salon
+        );                
 
-      const pendingPost = await savePost(
-        chatId,
-        stylistWithManager,
-        draft.caption,
-        draft.hashtags || [],
-        "manager_pending",
-        io,
-        salon
-      );
+        // Double-check that data persisted
+        console.log("💾 Post saved with stylist_name + salon_id:", {
+          id: pendingPost?.id,
+          stylist_name: stylistName,
+          salon_id: salon?.salon_id || salon?.id || salon?.salon_info?.id,
+        });
 
-      if (!pendingPost?.id) {
-        await sendMessage.sendText(chatId, "⚠️ Could not save your post. Please try again.");
+
+        if (!pendingPost?.id) {
+          await sendMessage.sendText(chatId, "⚠️ Could not save your post. Please try again.");
+          endTimer(start);
+          return;
+        }
+
+        const persistPayload = {
+          ...draft,
+          final_caption: buildFacebookCaption(baseCaption, stylistName, stylistHandle),
+          stylist_name: stylistName,
+          instagram_handle: stylistHandle,
+          booking_url: bookingUrl,
+          image_url: draft.image_url || null,
+          status: "manager_pending"
+        };
+        await updatePostStatus(pendingPost.id, "manager_pending", persistPayload);
+
+        console.log("💾 Post persisted (manager_pending):", { id: pendingPost.id });
+
+        // =====================================================
+        // ✅ v0.8 — Simplified Manager Link Notification (Twilio)
+        // =====================================================
+
+        // Dynamically resolve the salon identifier
+        const salonIdentifier =
+          salon.salon_id ||
+          salon.id ||
+          salon?.salon_info?.id ||
+          salon?.salon_info?.name?.toLowerCase().replace(/\s+/g, "") ||
+          "unknown";
+
+          const salonKey =
+          salon?.salon_id ||
+          salon?.id ||
+          salon?.salon_info?.id ||
+          (salon?.salon_name?.toLowerCase().replace(/\s+/g, "")) ||
+          "unknown";
+
+          const token = await issueManagerToken(salonKey, manager.phone);
+          console.log("🔑 Manager token created:", token);
+
+          const managerLink = `${process.env.HOST || "http://localhost:3000"}/manager/login?token=${token}`;
+          const notifyBody = `✂️ MostlyPostly: New post from ${stylistName}
+
+          Review here: ${managerLink}
+
+          (Reply APPROVE to auto-schedule this post for your next available slot.)`;
+
+          if (manager?.phone) {
+            console.log("📤 Sending manager approval link via Twilio →", manager.phone);
+            await sendMessage.sendText(manager.phone, notifyBody);
+          } else if (manager?.chat_id) {
+          console.log("📤 No phone found — using Telegram fallback");
+          await sendManagerPreviewPhoto(manager.chat_id, draft.image_url, {
+            draft,
+            stylist,
+            salon,
+          });
+          } else {
+          console.warn("⚠️ No manager contact configured.");
+        }
+
+        await sendMessage.sendText(chatId, "✅ Your post is pending manager approval before publishing.");
+        drafts.delete(chatId);
         endTimer(start);
         return;
       }
 
-      const persistPayload = {
-        ...draft,
-        final_caption: buildFacebookCaption(baseCaption, stylistName, stylistHandle),
-        stylist_name: stylistName,
-        instagram_handle: stylistHandle,
-        booking_url: bookingUrl,
-        image_url: draft.image_url || null,
-        status: "manager_pending"
-      };
-
-      const updated = await updatePostStatus(pendingPost.id, "manager_pending", persistPayload);
-      console.log("💾 Post persisted (manager_pending):", { id: pendingPost.id, hasFinal: !!updated?.final_caption });
-
-      if (source === "telegram") {
-        const managerChatId = manager?.chat_id;
-        if (managerChatId) {
-          console.log("📤 Sending manager preview to", managerChatId, "for", stylistName);
-          await sendManagerPreviewPhoto(managerChatId, draft.image_url, {
-            draft: { ...draft, caption: draft.caption, hashtags: draft.hashtags, cta: draft.cta },
-            stylist,
-            salon
-          });
-        } else {
-          await sendMessage.sendText(chatId, "⚠️ Manager Telegram chat_id not configured.");
-        }
-      } else {
-        const managerPhone = manager?.phone;
-        if (managerPhone) {
-          const smsBody = buildFacebookCaption(baseCaption, stylistName, stylistHandle);
-          await sendMessage.sendText(managerPhone, `${smsBody}\n📸 ${draft.image_url}`);
-        } else {
-          await sendMessage.sendText(chatId, "⚠️ Manager phone not configured.");
-        }
-      }
-
-      await sendMessage.sendText(chatId, "✅ Your post is pending manager approval before publishing.");
-      drafts.delete(chatId);
-      endTimer(start);
-      return;
-    }
-
+    
     // --------------------------
     // Direct post path
+    // --------------------------
+    let fbResult = null; // ensure it's visible across try/catch
     try {
       const image = draft.image_url || null;
 
@@ -645,45 +788,88 @@ const hasConsent =
       const igCaption = buildInstagramCaption(baseCaption, stylistName, stylistHandle);
 
       const pageId = salon?.salon_info?.facebook_page_id || process.env.FACEBOOK_PAGE_ID;
-      const fbResult = await publishToFacebook(pageId, fbCaption, image);
-      const fbLink = fbResult?.post_id
-        ? `https://facebook.com/${fbResult.post_id.replace("_", "/posts/")}`
-        : "✅ Facebook post created, but link unavailable.";
 
-      await sendMessage.sendText(chatId, `✅ *Approved and posted!*\n\n${fbCaption}\n\n${fbLink}`);
+      // ✅ Always rehost Twilio media to ensure a public URL for Meta (FB + IG)
+      let rehostedUrl = null;
+      try {
+        const draftImage = draft?.image_url || null;
+        if (draftImage && draftImage.includes("api.twilio.com")) {
+          rehostedUrl = await rehostTwilioMedia(draftImage, salon?.salon_id || "unknown");
+          console.log(`🌐 Rehosted image → ${rehostedUrl}`);
+        } else {
+          rehostedUrl = draftImage;
+        }
+      } catch (err) {
+        console.error("⚠️ Failed to rehost Twilio media:", err.message);
+        rehostedUrl = draft?.image_url || null; // fallback
+      }
 
-      // Optional IG
+      // ✅ Publish to Facebook first
+      fbResult = await publishToFacebook(pageId, fbCaption, rehostedUrl);
+
+      // Define fbLink *before* logging or sending messages
+      const fbLink =
+        fbResult?.link ||
+        (fbResult?.post_id
+          ? `https://facebook.com/${fbResult.post_id.replace("_", "/posts/")}`
+          : "✅ Facebook post created, but link unavailable.");
+
+      console.log(`🚀 Facebook post published successfully: ${fbLink}`);
+
+      await sendMessage.sendText(
+        chatId,
+        `✅ *Approved and posted!*\n\n${fbCaption}\n\n${fbLink}`
+      );
+
+      // ✅ Optional IG Publish (if enabled)
       const IG_ENABLED = (process.env.PUBLISH_TO_INSTAGRAM || "false").toLowerCase() === "true";
       if (IG_ENABLED) {
         try {
-          const imageForIg = resolveImageUrl(null, draft);
+          let imageForIg = rehostedUrl || resolveImageUrl(null, draft);
+
+          if (imageForIg && imageForIg.includes("api.twilio.com")) {
+            console.log(`📸 Rehosted image for Instagram → ${imageForIg}`);
+            imageForIg = await rehostTwilioMedia(imageForIg, salon_id);
+          }
+
           if (imageForIg) {
-            console.log("📷 Preparing Instagram publish with image:", imageForIg);
             const igResult = await publishToInstagram({
               imageUrl: imageForIg,
-              caption: igCaption,              // IG gets @handle format without IG URL line
-              postId: fbResult?.id || undefined
+              caption: igCaption,
+              postId: fbResult?.id || undefined,
             });
-            await sendMessage.sendText(chatId, igResult?.media_id ? `📸 Instagram post (id: ${igResult.media_id})` : "📸 Instagram post created.");
+
+            await sendMessage.sendText(
+              chatId,
+              igResult?.media_id
+                ? `📸 Instagram post (id: ${igResult.media_id})`
+                : "📸 Instagram post created."
+            );
           } else {
             console.warn("⚠️ No imageUrl found for IG in direct-post path; skipping Instagram.");
           }
         } catch (igErr) {
           console.error("🚫 Instagram publish failed:", igErr);
-          await sendMessage.sendText(chatId, "⚠️ Instagram publish failed (check server logs).");
+          await sendMessage.sendText(
+            chatId,
+            "⚠️ Instagram publish failed (check server logs)."
+          );
         }
       }
 
       drafts.delete(chatId);
     } catch (err) {
       console.error("🚫 [Router] Facebook post failed:", err);
-      await sendMessage.sendText(chatId, "⚠️ Could not post to Facebook. Check server logs.");
+      await sendMessage.sendText(
+        chatId,
+        "⚠️ Could not post to Facebook. Check server logs."
+      );
     }
 
     endTimer(start);
     return;
   }
-
+  
   // DENY + reason
   if (command === "DENY") {
     const pending = findPendingPostByManager(chatId);
@@ -715,7 +901,14 @@ const hasConsent =
 
     await sendMessage.sendText(chatId, "🔄 Regenerating a fresh caption...");
     try {
-      const aiJson = await safeGenerateCaption(draft.image_url, draft.original_notes || "", stylist?.city || "", stylist);
+      const aiJson = await generateCaption({
+        imageDataUrl: draft.image_url,
+        notes: draft.original_notes || "",
+        salon,
+        stylist,
+        city: stylist?.city || ""
+      });
+
       aiJson.image_url = draft.image_url;
       aiJson.original_notes = draft.original_notes;
       drafts.set(chatId, aiJson);
@@ -752,6 +945,14 @@ Reply *APPROVE* to continue, *REGENERATE*, or *CANCEL* to start over.
     return;
   }
 
+  // 🚫 Prevent AI preview or image handling during JOIN setup
+  if (/^(join|cancel|setup|agree)\b/i.test(cleanText) || isJoinInProgress(chatId)) {
+    console.log("⚠️ Skipping preview — active JOIN or setup command detected");
+    endTimer(start);
+    return;
+  }
+
+
   // NEW PHOTO — Consented?
   if (imageUrl) {
   const alreadyOptedIn =
@@ -771,115 +972,58 @@ Reply *APPROVE* to continue, *REGENERATE*, or *CANCEL* to start over.
       text,
       imageUrl,
       drafts,
-      safeGenerateCaption,
+      generateCaption,
       moderateAIOutput,
       sendMessage,
       stylist,
       salon
     });
+
     endTimer(start);
     return;
   }
 
   // Default
-const alreadyOptedIn =
-  stylist?.compliance_opt_in ||
-  stylist?.consent?.sms_opt_in ||
-  (stylist?.role === "manager" &&
-    (stylist?.compliance_opt_in || stylist?.consent?.sms_opt_in));
-
-if (!alreadyOptedIn && consentSessions.get(chatId)?.status !== "granted") {
-  await queueConsentAndPrompt(chatId, null, null, sendMessage, stylist);
-  endTimer(start);
-  return;
-}
-
+  if (
+    !(
+      stylist?.compliance_opt_in ||
+      stylist?.consent?.sms_opt_in ||
+      (stylist?.role === "manager" &&
+        (stylist?.compliance_opt_in || stylist?.consent?.sms_opt_in))
+    ) &&
+    consentSessions.get(chatId)?.status !== "granted"
+    ) {
+      await queueConsentAndPrompt(chatId, null, null, sendMessage, stylist);
+      endTimer(start);
+      return;
+    }
 
   await sendMessage.sendText(chatId, "📸 Please send a *photo* with a short note (like 'blonde balayage' or 'men’s cut').");
   endTimer(start);
 }
 
 // --------------------------------------
-// Manager approval → publish (FB + IG)
+// Manager approval → mark for scheduler
 async function handleManagerApproval(managerIdentifier, pendingPost, sendText) {
   console.log("🧩 Debug: Pending post ID:", pendingPost.id, "final_caption:", !!pendingPost.final_caption);
   console.log("🧾 Stored final_caption preview:", pendingPost.final_caption?.slice?.(0, 100));
 
-  // Rebuild a base caption if needed (without network-specific tweaks yet)
-  let baseCaption = pendingPost.final_caption;
-  if (!baseCaption) {
-    console.warn("⚠️ No final_caption found — rebuilding fallback caption.");
-    baseCaption = composeFinalCaption({
-      caption: pendingPost.caption || "",
-      hashtags: pendingPost.hashtags || [],
-      cta: pendingPost.cta || "Book your next visit today!",
-      instagramHandle: null,
-      stylistName: pendingPost.stylist_name || "Unknown Stylist",
-      bookingUrl:
-        pendingPost.booking_url ||
-        pendingPost.salon_info?.booking_url ||
-        "",
-      salon: { salon_info: pendingPost.salon_info || { default_hashtags: [] } },
-      asHtml: false
-    });
-  }
-
-  // Build per-network captions
-  const fbCaption = buildFacebookCaption(
-    baseCaption,
-    pendingPost.stylist_name || "Unknown Stylist",
-    pendingPost.instagram_handle
-  );
-  const igCaption = buildInstagramCaption(
-    baseCaption,
-    pendingPost.stylist_name || "Unknown Stylist",
-    pendingPost.instagram_handle
-  );
-
-  const pageId = pendingPost.facebook_page_id || pendingPost.salon_info?.facebook_page_id || process.env.FACEBOOK_PAGE_ID;
-  const image = pendingPost.image_url || null;
-
   try {
-    // Facebook
-    const fbRes = await publishToFacebook(pageId, fbCaption, image);
-    const fbLink = fbRes?.post_id
-      ? `https://facebook.com/${fbRes.post_id.replace("_", "/posts/")}`
-      : "✅ Facebook post created, but link unavailable.";
+    // Update DB to queue post for scheduler
+    db.prepare(`
+      UPDATE posts
+      SET status='manager_approved',
+          scheduled_for=datetime('now'),
+          approved_by=?,
+          approved_at=datetime('now')
+      WHERE id=?`).run(managerIdentifier, pendingPost.id);
 
-    await updatePostStatus(pendingPost.id, "manager_approved", {
-      fb_post_id: fbRes?.post_id || null,
-      fb_response_id: fbRes?.id || null,
-      published_at: new Date().toISOString(),
-      final_caption: fbCaption
-    });
+    await sendText(managerIdentifier, "✅ Approved — your post will be auto-published in the next available slot.");
+    await sendText(pendingPost.stylist_phone, "✅ Manager approved your post! It’s queued for publishing soon.");
 
-    await sendText(pendingPost.stylist_phone, `✅ Your post was approved and published!\n\n${fbCaption}\n\n${fbLink}`);
-    await sendText(managerIdentifier, "✅ Post approved and published successfully.");
-    console.log("🧩 Unified caption published successfully (FB):\n", fbCaption);
-
-    // Instagram (optional)
-    const IG_ENABLED = (process.env.PUBLISH_TO_INSTAGRAM || "false").toLowerCase() === "true";
-    if (IG_ENABLED) {
-      try {
-        const imageForIg = resolveImageUrl(pendingPost, null);
-        if (imageForIg) {
-          console.log("📷 Preparing Instagram publish with image:", imageForIg);
-          const igResult = await publishToInstagram({
-            imageUrl: imageForIg,
-            caption: igCaption,     // IG gets @handle format without IG URL line
-            postId: pendingPost.id
-          });
-          await sendText(pendingPost.stylist_phone, igResult?.media_id ? `📸 Instagram post (id: ${igResult.media_id})` : "📸 Instagram post created.");
-        } else {
-          console.warn("⚠️ No imageUrl on pending post; skipping Instagram publish.");
-        }
-      } catch (igErr) {
-        console.error("🚫 Instagram publish failed:", igErr);
-        await sendText(managerIdentifier, "⚠️ Instagram publish failed (check logs).");
-      }
-    }
+    console.log(`🕓 Manager SMS approval queued post ${pendingPost.id} for scheduler.`);
   } catch (err) {
-    console.error("🚫 [ManagerApproval] Facebook publish failed:", err);
-    await sendText(managerIdentifier, "⚠️ Could not publish post to Facebook. Check logs.");
+    console.error("❌ Manager SMS approval scheduling failed:", err.message);
+    await sendText(managerIdentifier, "⚠️ Could not schedule this post. Try again later.");
   }
 }

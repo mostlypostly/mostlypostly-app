@@ -1,58 +1,95 @@
-// src/publishers/facebook.js — MostlyPostly NPE-safe permanent publisher
+// src/publishers/facebook.js — multi-tenant aware, simple + robust
 import fetch from "node-fetch";
 
 /**
- * Publishes a post or photo to a Facebook Page.
- * Uses the Page token if present; otherwise falls back to the permanent System-User token.
- * Compatible with the New Pages Experience (requires /me/feed or /me/photos).
+ * Publish a post to a Facebook Page.
+ *
+ * @param {string} pageId              - Facebook Page ID
+ * @param {string} caption             - Post caption text
+ * @param {string|null} imageUrl       - Public URL of image to post (already rehosted)
+ * @param {string|null} tokenOverride  - Optional page access token to use instead of env defaults
  */
-export async function publishToFacebook(pageId, caption, imageUrl = null) {
-  // Choose the correct token
+export async function publishToFacebook(
+  pageId,
+  caption,
+  imageUrl = null,
+  tokenOverride = null
+) {
+  if (!pageId || typeof pageId !== "string") {
+    console.error("❌ [Facebook] Invalid pageId:", pageId);
+    throw new Error("Facebook publisher received invalid pageId");
+  }
+
   const token =
+    tokenOverride ||
     process.env.FACEBOOK_PAGE_TOKEN ||
     process.env.FACEBOOK_SYSTEM_USER_TOKEN;
 
   if (!token) {
     throw new Error(
-      "❌ Missing Facebook access token (FACEBOOK_PAGE_TOKEN or FACEBOOK_SYSTEM_USER_TOKEN)"
+      "Missing Facebook access token (no salon token and no env token)"
     );
   }
 
-  const tokenType = process.env.FACEBOOK_PAGE_TOKEN
-    ? "Page Token"
-    : "System User Token";
+  const safeCaption = (caption || "").toString().slice(0, 2200);
+  const endpointPhoto = `https://graph.facebook.com/v19.0/${pageId}/photos`;
+  const endpointFeed = `https://graph.facebook.com/v19.0/${pageId}/feed`;
 
-  console.log(`🚀 Posting to Facebook Page ID: ${pageId}`);
-  console.log(`🔑 Using token type: ${tokenType}`);
+  console.log(
+    `🚀 [Facebook] Posting to pageId=${pageId} hasImage=${!!imageUrl} usingTokenOverride=${!!tokenOverride}`
+  );
 
-  // --- Build request ---
-  const endpoint = imageUrl
-    ? "https://graph.facebook.com/v19.0/me/photos"
-    : "https://graph.facebook.com/v19.0/me/feed";
+  // If we have a usable image URL, try a photo post first
+  if (imageUrl && typeof imageUrl === "string") {
+    try {
+      console.log("📤 [Facebook] Attempting photo post with URL…");
+      const res = await fetch(endpointPhoto, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          caption: safeCaption,
+          url: imageUrl,
+          access_token: token,
+        }),
+      });
 
-  // Form data (preferred by Graph API for media uploads)
-  const payload = imageUrl
-    ? { caption, url: imageUrl, access_token: token }
-    : { message: caption, access_token: token };
+      const data = await res.json();
 
-  try {
-    const resp = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    const data = await resp.json();
-
-    if (!resp.ok) {
-      console.error("🚫 Facebook API Error:", JSON.stringify(data, null, 2));
-      throw new Error(data.error?.message || "Facebook API request failed");
+      if (!res.ok || data.error) {
+        const msg = data?.error?.message || "Unknown FB photo error";
+        console.warn("⚠️ [Facebook] Photo upload failed:", msg);
+        // fall through to text-only feed post
+      } else {
+        console.log("✅ [Facebook] Photo post success:", data);
+        return data;
+      }
+    } catch (err) {
+      console.warn(
+        "⚠️ [Facebook] Photo upload threw error, will fallback to feed:",
+        err.message
+      );
+      // continue to feed fallback
     }
-
-    console.log("✅ Facebook API Response:", data);
-    return data;
-  } catch (err) {
-    console.error("❌ Facebook post failed:", err.message);
-    throw err;
   }
+
+  // Fallback: text-only feed post
+  console.log("ℹ️ [Facebook] Falling back to text-only feed post…");
+  const feedRes = await fetch(endpointFeed, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      message: safeCaption,
+      access_token: token,
+    }),
+  });
+
+  const feedData = await feedRes.json();
+  if (!feedRes.ok || feedData.error) {
+    const msg = feedData?.error?.message || "Unknown FB feed error";
+    console.error("❌ [Facebook] Feed post failed:", msg);
+    throw new Error(msg);
+  }
+
+  console.log("✅ [Facebook] Feed post success:", feedData);
+  return feedData;
 }

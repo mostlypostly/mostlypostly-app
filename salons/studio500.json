@@ -1,0 +1,77 @@
+{
+  "salon_id": "studio500",
+  "salon_info": {
+    "name": "Studio 500 Salon",
+    "city": "Speedway, IN",
+    "timezone": "America/Indiana/Indianapolis",
+    "booking_url": "https://www.vagaro.com//Users/BusinessWidget.aspx?enc=MMLjhIwJMcwFQhXLL7ifVHQnqFHUkk/3gGFrYJ1tNtbWV1vxgQS/VmOxARKi2Mk5pGoFWm5LteSkTw4lsqHGF0Q5ywtI0w6u7krglcUxZNvU1cxUpqx5W54DUZ0NmvL0/HvTLvddXzexK/58KGf1EVkyF2t9nl9ltMo4R4rbwLzakJ8F4M9x5vRxbbJPPgBe771+R0fzUfz5iePyzSiuzzW1O2xEhBQXU+HnTX47ChYW5Z9TSpg0ePSaJp0IrlQZhV+mzgZycXlE3oG20EPAtAkIVHYfSHrtqmNLpLwcAqmEEx5toxEhAV2H4VUt97uYJbNOe/2PMTKW9qx+FujmZg==",
+    "facebook_page_id": "139062439475220",
+    "facebook_page_token": "EAALRJtc7XxUBPy7ZBFXWFe62W4oC3ZAV91iZBe3M4CNWLOhziR3XciGyiCstLY9pLijAtNzEzDKk6ZAGSKWTqwzIY7chZA5SL0YeZBE1U5H8Yd7ZA8RtGPRUBWCgh5ZBhZA0UJQKWZCMhO7ZCZAWfkxtskLqX1aBoZA3TR4rUCvFdyxZC9jMJqvdDKp5ewUI8nonRpEIYH04fSFBQzriZCUDiLxlZAwv",
+    "instagram_business_id": "17841414821714652",
+    "instagram_handle": "studio500salonllc",
+    "x_handle": "studio500salon",
+    "tiktok_handle": "studio500salon",
+    "preferred_brand_1": "Aveda",
+    "preferred_brand_2": "",
+    "default_hashtags": [
+      "#Studio500Salon",
+      "#SpeedwayIndiana",
+      "#HairByStudio500"
+    ],
+    "tone_profile": "professional",
+    "auto_publish": false,
+    "compliance": {
+      "stylist_sms_consent_required": true
+    }
+  },
+  "settings": {
+    "require_manager_approval": true,
+    "auto_post_if_no_response_hours": 24,
+    "notify_stylist_on_approval": true,
+    "notify_stylist_on_denial": true,
+    "posting_window": { "start": "09:00", "end": "19:00" },
+    "random_delay_minutes": { "min": 20, "max": 45 }
+  },
+  "managers": [
+    {
+      "id": "manager-troy-studio500",
+      "name": "Troy Hardister",
+      "role": "manager",
+      "chat_id": 8483384005,
+      "phone": "+13179385492",
+      "instagram_handle": "irontman72",
+      "salon_name": "Studio 500 Salon",
+      "city": "Speedway, IN",
+      "specialties": [
+        "color",
+        "men’s grooming"
+      ],
+      "consent": {
+        "sms_opt_in": true,
+        "timestamp": "2025-11-09T18:00:00Z"
+      },
+      "compliance_opt_in": true,
+      "compliance_timestamp": "2025-11-09T18:00:00Z"
+    }
+  ],
+  "stylists": [
+    {
+      "id": "stylist-braylinn-studio500",
+      "name": "Braylinn",
+      "role": "stylist",
+      "chat_id": 4632067474,
+      "phone": "+14632067474",
+      "instagram_handle": "hardisterbraylinn",
+      "salon_name": "Studio 500 Salon",
+      "city": "Speedway, IN",
+      "specialties": ["vivids", "blonding"],
+      "consent": {
+        "sms_opt_in": true,
+        "timestamp": "2025-11-09T18:10:00Z"
+      },
+      "compliance_opt_in": true,
+      "compliance_timestamp": "2025-11-09T18:10:00Z"
+    }
+  ],
+  "__file": "/Users/troyhardister/mostlypostly-clean/salons/studio500.json"
+}

@@ -1,106 +1,61 @@
-// db.js — lightweight SQLite wrapper for Postly (ESM version)
-import sqlite3pkg from "sqlite3";
-import { fileURLToPath } from "url";
+// db.js — unified synchronous database (Better-SQLite3, ESM-safe)
+import fs from "fs";
 import path from "path";
+import Database from "better-sqlite3";
 
-const sqlite3 = sqlite3pkg.verbose();
+const DB_PATH = path.join(process.cwd(), "postly.db");
+console.log("🗂 Using database at:", DB_PATH);
 
-// --- Ensure correct file path ---
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const dbPath = path.join(__dirname, "postly.db");
-
-// --- Connect or create database ---
-export const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) console.error("❌ DB connection error:", err);
-  else console.log("✅ Connected to postly.db");
+// Single connection, synchronous writes
+export const db = new Database(DB_PATH, {
+  timeout: 10000,
+  verbose: null,
 });
 
-// --- Initialize tables ---
-db.serialize(() => {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS drafts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      phone TEXT,
-      stylist_name TEXT,
-      salon_name TEXT,
-      city TEXT,
-      data TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  db.run(`
-    CREATE TABLE IF NOT EXISTS posts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      phone TEXT,
-      stylist_name TEXT,
-      salon_name TEXT,
-      city TEXT,
-      ig_post TEXT,
-      fb_post TEXT,
-      x_post TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-});
-
-// ---- helpers ----
-export function saveDraft(phone, stylist, aiJson) {
-  const data = JSON.stringify(aiJson);
-  db.run(
-    `INSERT INTO drafts (phone, stylist_name, salon_name, city, data)
-     VALUES (?, ?, ?, ?, ?)`,
-    [phone, stylist?.stylist_name, stylist?.salon_name, stylist?.city, data],
-    (err) => {
-      if (err) console.error("⚠️ DB insert error (draft):", err);
-      else console.log(`💾 Draft saved for ${stylist?.stylist_name || phone}`);
-    }
-  );
+// Auto-create/verify schema on first run (idempotent)
+try {
+  const schemaPath = path.join(process.cwd(), "schema.sql");
+  if (fs.existsSync(schemaPath)) {
+    const schema = fs.readFileSync(schemaPath, "utf8");
+    db.exec(schema);
+    console.log("✅ MostlyPostly schema initialized or verified.");
+  } else {
+    console.log("ℹ️ schema.sql not found — skipping auto-init.");
+  }
+} catch (e) {
+  console.error("⚠️ Failed to apply schema.sql:", e.message);
 }
 
-export function getLatestDraft(phone, callback) {
-  db.get(
-    `SELECT * FROM drafts WHERE phone = ? ORDER BY created_at DESC LIMIT 1`,
-    [phone],
-    (err, row) => callback(err, row ? JSON.parse(row.data) : null)
-  );
+// Recommended PRAGMAs
+try {
+  db.pragma("journal_mode = WAL");
+  db.pragma("synchronous = FULL");
+} catch (e) {
+  console.warn("⚠️ Failed to set PRAGMAs:", e.message);
 }
 
-export function savePost(phone, stylist, igPost, fbPost, xPost, io = null) {
-  db.run(
-    `INSERT INTO posts (phone, stylist_name, salon_name, city, ig_post, fb_post, x_post)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [
-      phone,
-      stylist?.stylist_name,
-      stylist?.salon_name,
-      stylist?.city,
-      igPost,
-      fbPost,
-      xPost,
-    ],
-    (err) => {
-      if (err) {
-        console.error("⚠️ DB insert error (post):", err);
-      } else {
-        console.log(`✅ Post saved for ${stylist?.stylist_name || phone}`);
+// Minimal legacy bootstrap (safe if schema already created)
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS manager_tokens (
+    token TEXT PRIMARY KEY,
+    salon_id TEXT,
+    manager_phone TEXT,
+    expires_at TEXT
+  )
+`).run();
 
-        // ✅ Emit real-time dashboard update if Socket.IO is available
-        if (io) {
-          const newPost = {
-            phone,
-            stylist_name: stylist?.stylist_name,
-            salon_name: stylist?.salon_name,
-            city: stylist?.city,
-            ig_post: igPost,
-            fb_post: fbPost,
-            x_post: xPost,
-          };
-          io.emit("new_post", newPost);
-          console.log("📢 Emitted new_post event to dashboard");
-        }
-      }
-    }
-  );
+// Helper used by messageRouter.js to confirm token insert visibility
+export function verifyTokenRow(token) {
+  try {
+    const row = db.prepare(
+      "SELECT token, salon_id, manager_phone, expires_at FROM manager_tokens WHERE token = ?"
+    ).get(token);
+    console.log("🔍 Verified token readback:", row || "❌ Not found");
+    return row;
+  } catch (err) {
+    console.error("❌ Token verification failed:", err.message);
+    return null;
+  }
 }
+
+export default db;

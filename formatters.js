@@ -1,5 +1,5 @@
 // formatters.js — MostlyPostly caption and post builders (ESM version)
-// v0.5 — Adds Manager Approval and Notification Templates
+// v0.5-spaced — adds better spacing + removes * around commands
 
 // ------------------------------------
 // 💅 Specialty → Hashtag Mapping
@@ -25,21 +25,33 @@ function normalizeTag(tag) {
 }
 
 // ------------------------------------
-// ✅ Helper: merge all hashtag sources
+// ✅ Core: mergeHashtags (for AI + salon defaults + brand)
+// ------------------------------------
+export function mergeHashtags(aiTags = [], salonDefaults = [], brandTag = "#MostlyPostly") {
+  const incoming = [...(aiTags || []), ...(salonDefaults || []), brandTag];
+  const out = [];
+  const seen = new Set();
+  for (const raw of incoming) {
+    const t = (raw || "").toString().trim();
+    if (!t.startsWith("#") || !t) continue;
+    const key = t.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+  }
+  return out;
+}
+
+// ------------------------------------
+// ✅ Helper: merge all hashtag sources (AI + salon + stylist + specialty + brand)
 // ------------------------------------
 function mergeAllHashtags(draft, stylist, salon) {
   const base = new Set();
 
-  // 1️⃣ AI-generated hashtags
   (draft?.hashtags || []).forEach((h) => base.add(normalizeTag(h)));
-
-  // 2️⃣ Salon-level hashtags
   (salon?.custom_hashtags || []).forEach((h) => base.add(normalizeTag(h)));
-
-  // 3️⃣ Stylist-level hashtags
   (stylist?.custom_hashtags || []).forEach((h) => base.add(normalizeTag(h)));
 
-  // 4️⃣ Specialty hashtags
   const service = (draft?.service_type || "").toLowerCase();
   if (stylist?.specialties?.length) {
     for (const specialty of stylist.specialties) {
@@ -49,95 +61,89 @@ function mergeAllHashtags(draft, stylist, salon) {
     }
   }
 
-  // 5️⃣ Salon brand hashtags (Aveda, etc.)
   const brand1 = salon?.preferred_brand_1?.toLowerCase() || "";
   const brand2 = salon?.preferred_brand_2?.toLowerCase() || "";
-  if (brand1.includes("aveda")) base.add("#Aveda");
-  if (brand2.includes("aveda")) base.add("#Aveda");
+  if (brand1.includes("aveda") || brand2.includes("aveda")) base.add("#Aveda");
   if (brand1 && !brand1.includes("aveda")) base.add(`#${brand1}`);
   if (brand2 && !brand2.includes("aveda")) base.add(`#${brand2}`);
 
-  // 6️⃣ Always include #MostlyPostly
   base.add("#MostlyPostly");
-
   return Array.from(base);
 }
 
 // ------------------------------------
-// ✅ Helper: build stylist tag line with Instagram link
+// ✅ Helper: build stylist tag line
 // ------------------------------------
 function buildTagLine(stylist) {
   if (!stylist?.instagram_handle) return "";
-  const igHandle = stylist.instagram_handle;
-  return `Styled by @${igHandle} (https://www.instagram.com/${igHandle}/)`;
+  const igHandle = stylist.instagram_handle.replace(/^@+/, "");
+  return `Styled by @${igHandle}`;
 }
 
-// ------------------------------------
 // 📸 Instagram Post Formatter
-// ------------------------------------
 export function formatInstagramPost(draft, stylist, salon) {
   const caption = draft.caption || "";
   const hashtags = mergeAllHashtags(draft, stylist, salon).join(" ");
   const cta = draft.cta || "Book your next visit today!";
   const tagLine = buildTagLine(stylist);
 
-  return `${caption}\n\n${tagLine}\n\n${hashtags}\n\n${cta}\nBook via link in bio.`;
+  // 🧩  double-spacing between sections
+  return [
+    caption.trim(),
+    "",
+    "",
+    tagLine,
+    "",
+    "",
+    hashtags,
+    "",
+    "",
+    cta,
+    "",
+    "Book via link in bio."
+  ].join("\n");
 }
 
-// ------------------------------------
-// 📘 Facebook Post Formatter
-// ------------------------------------
+// 📘 Facebook Post Formatter (FB-safe spacing with zero-width spacer)
 export function formatFacebookPost(draft, stylist, salon) {
-  // Normalize salon shape so we can read defaults reliably
+  const FB_SPACER = "\u200B"; // zero-width space line to preserve blank lines on Facebook
+
   const salonInfo = salon?.salon_info ? salon.salon_info : salon || {};
   const bookingUrl = salonInfo?.booking_url || "";
-
-  // 1) Pull salon defaults regardless of key naming
   const salonDefaults =
     Array.isArray(salonInfo?.default_hashtags) && salonInfo.default_hashtags.length
       ? salonInfo.default_hashtags
-      : (Array.isArray(salonInfo?.custom_hashtags) ? salonInfo.custom_hashtags : []);
-
-  // 2) Merge (AI + salon defaults + brand) with de-dupe
-  const BRAND_TAG = (process.env.MOSTLYPOSTLY_BRAND_TAG || "#MostlyPostly");
+      : Array.isArray(salonInfo?.custom_hashtags)
+      ? salonInfo.custom_hashtags
+      : [];
+  const BRAND_TAG = process.env.MOSTLYPOSTLY_BRAND_TAG || "#MostlyPostly";
   const combinedHashtags = mergeHashtags(draft?.hashtags || [], salonDefaults, BRAND_TAG);
 
-  // 3) Build the base caption exactly as before (plain text)
-  let caption = composeFinalCaption({
-    caption: draft?.caption,
-    hashtags: combinedHashtags,
-    cta: draft?.cta,
-    instagramHandle: stylist?.instagram_handle,
-    stylistName: stylist?.stylist_name,
-    bookingUrl,
-    salon: { salon_info: salonInfo },
-    asHtml: false
-  });
-
-  // 4) Make the stylist handle clickable on FB by appending a real URL
   const handle = (stylist?.instagram_handle || "").replace(/^@+/, "");
-  if (handle) {
-    caption += `\nIG: https://instagram.com/${handle}`;
-  }
+  const tagLine = handle ? `Styled by @${handle}` : `Styled by ${stylist?.stylist_name || "a stylist"}`;
+  const cta = draft?.cta || "Book your next visit today!";
 
-  return caption;
-}
+  // Build logical blocks
+  const blocks = [
+    (draft?.caption || "").trim(),
+    tagLine,
+    combinedHashtags.join(" "),
+    cta,
+    bookingUrl ? `Book: ${bookingUrl}` : ""
+  ].filter((b) => typeof b === "string"); // keep empties for spacer logic handling below
 
-// Helper lives in this file to avoid touching other modules
-function mergeHashtags(aiTags = [], salonDefaults = [], brandTag = "#MostlyPostly") {
-  const incoming = [...aiTags, ...salonDefaults, brandTag];
+  // Join blocks with an FB-safe blank line (the spacer)
   const out = [];
-  const seen = new Set();
-  for (const raw of incoming) {
-    const t = (raw || "").toString().trim();
-    if (!t || !t.startsWith("#")) continue;
-    const key = t.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(t);
+  for (let i = 0; i < blocks.length; i++) {
+    const block = (blocks[i] || "").trim();
+    if (!block) continue; // skip truly empty blocks
+    if (out.length) out.push(FB_SPACER); // blank line that FB will keep
+    out.push(block);
   }
-  return out;
+
+  return out.join("\n");
 }
+
 
 // ------------------------------------
 // 🕊️ X (Twitter) Post Formatter
@@ -149,46 +155,60 @@ export function formatXPost(draft, stylist, salon) {
   const tagLine = buildTagLine(stylist);
   const url = salon?.booking_url || "";
 
-  return `${caption} ${cta}\n${tagLine}\n${hashtags}\n${url}`;
+  return `${caption}\n\n${cta}\n\n${tagLine}\n\n${hashtags}\n\n${url}`;
 }
 
-// =====================================================================
-// ✉️ Manager + Stylist Notifications (for SMS/Telegram)
-// =====================================================================
-
-/**
- * 🧾 Notify manager when stylist submits a post for review
- */
+// ------------------------------------
+// ✉️ Notifications (Manager + Stylist)
+// ------------------------------------
 export function formatManagerNotification(salon, post) {
   const salonName = salon?.salon_info?.salon_name || salon?.salon_name || "Salon";
   const stylist = post?.stylist_name || "A stylist";
   const caption = post?.caption || "No caption provided";
   const img = post?.image_url ? "\n📸 Image attached." : "";
-
-  return `📝 *${salonName} — New Post for Review*\nFrom: ${stylist}\n\n"${caption}"${img}\n\nReply *APPROVE* to post or *DENY* to reject.`;
+  return [
+    `📝 ${salonName} — New Post for Review`,
+    `From: ${stylist}`,
+    "",
+    `"${caption}"${img}`,
+    "",
+    "Reply APPROVE to post or DENY to reject."
+  ].join("\n");
 }
 
-/**
- * ✅ Notify stylist that their post was approved + published
- */
 export function formatStylistApproved(post) {
   const caption = post?.caption || "";
   const booking = post?.booking_url || "https://booking.rejuvesalonandspa.com";
-  return `🎉 Your post was approved and published!\n\n"${caption}"\n\nBook link: ${booking}\n\nKeep up the great work! 💇‍♀️`;
+  return [
+    "🎉 Your post was approved and published!",
+    "",
+    `"${caption}"`,
+    "",
+    `Book link: ${booking}`,
+    "",
+    "Keep up the great work! 💇‍♀️"
+  ].join("\n");
 }
 
-/**
- * 🚫 Notify stylist that their post was denied + include reason
- */
 export function formatStylistDenied(post, reason) {
   const manager = post?.manager_name || "your manager";
-  return `🚫 Your post was denied by ${manager}.\nReason: "${reason}"\n\nPlease edit and resubmit when ready.`;
+  return [
+    `🚫 Your post was denied by ${manager}.`,
+    `Reason: "${reason}"`,
+    "",
+    "Please edit and resubmit when ready."
+  ].join("\n");
 }
 
-/**
- * 🕓 (Optional future use)
- * Notify stylist if post auto-published after manager timeout
- */
 export function formatAutoPublishNotice(post) {
-  return `⏰ Your post was automatically published after manager review timeout.\n\n"${post.caption}"\n\nKeep creating great content!`;
+  return [
+    "⏰ Your post was automatically published after manager review timeout.",
+    "",
+    `"${post.caption}"`,
+    "",
+    "Keep creating great content!"
+  ].join("\n");
 }
+
+// ✅ Export helpers
+export { mergeAllHashtags, normalizeTag };

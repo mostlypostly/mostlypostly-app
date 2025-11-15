@@ -76,10 +76,9 @@ const insertPostStmt = db.prepare(`
     published_at,
     _meta,
     created_at,
-    updated_at,
-    salon_post_number
-)
-VALUES (
+    updated_at
+  )
+  VALUES (
     @id,
     @salon_id,
     @stylist_id,
@@ -110,9 +109,8 @@ VALUES (
     @published_at,
     @_meta,
     @created_at,
-    @updated_at,
-    @salon_post_number
-)
+    @updated_at
+  )
 `);
 
 function buildDynamicUpdate(table, id, patch = {}) {
@@ -160,21 +158,6 @@ export function savePost(
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
 
-    // ----------------------------------------
-    // Assign per-salon post counter (correct)
-    // ----------------------------------------
-    let salon_post_number = 1;
-
-    try {
-      const row = db
-        .prepare(`SELECT MAX(salon_post_number) AS maxnum FROM posts WHERE salon_id = ?`)
-        .get(salon?.salon_id || null);
-
-      if (row?.maxnum) salon_post_number = row.maxnum + 1;
-    } catch (err) {
-      console.warn("⚠️ Could not compute salon_post_number:", err.message);
-    }
-
   const bookingUrl =
     stylist.booking_url ||
     stylist?.salon_info?.booking_url ||
@@ -188,10 +171,8 @@ export function savePost(
   // Unified fields
   const payload = {
     id,
-    // Fix: correct salon_id for foreign key constraint
-    salon_id: salon?.salon_id || salon?.salon_info?.id || null,                          
+    salon_id: salon?.salon_id || salon?.id || salon?.salon_info?.id || "unknown",
     stylist_id: null,
-    salon_post_number,
     stylist_name: stylist.stylist_name || stylist.name || "Unknown Stylist",
     stylist_phone: String(chatId),
 

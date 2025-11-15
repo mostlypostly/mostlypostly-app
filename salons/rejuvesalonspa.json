@@ -3,11 +3,14 @@
   "salon_info": {
     "name": "Rejuve Salon Spa",
     "city": "Carmel, IN",
+    "timezone": "America/Indiana/Indianapolis",
     "booking_url": "https://booking.rejuvesalonandspa.com/webstoreNew/services?utm_source=rejuvesalonandspa.com&utm_medium=website&utm_campaign=newToRejuve_page",
     "facebook_page_id": "118354306723",
     "instagram_handle": "rejuvesalonspa",
     "x_handle": "rejuvesalonspa",
     "tiktok_handle": "rejuvesalonspa",
+    "facebook_page_token": "EAALRJtc7XxUBPz5DN0BZA3IdRafTuImZAzXjNNZAZANnNN1UT29ZB2wjfkdfnNyC0LZAIWyDCtdGqLKrmdjIZAW5Uu7TZAjkX7VI2GYaU4kxCe3xztJbJdj7eYwWHoYv7HoZBI12fWrmBdnUPRc7YQS1PQ1OhXYFwQN7zj3DiznllKgBAnfPrhuOZCa9Y1o5rWFBtxdJWiROFhhTVD2c0GQCUZD",
+    "instagram_business_id": "17841403035609060",
     "preferred_brand_1": "Aveda",
     "preferred_brand_2": "",
     "default_hashtags": [
@@ -15,16 +18,18 @@
       "#CarmelIndiana"
     ],
     "tone_profile": "friendly",
-    "auto_publish": true,
+    "auto_publish": false,
     "compliance": {
       "stylist_sms_consent_required": true
     }
   },
   "settings": {
-    "require_manager_approval": false,
+    "require_manager_approval": true,
     "auto_post_if_no_response_hours": 24,
     "notify_stylist_on_approval": true,
-    "notify_stylist_on_denial": true
+    "notify_stylist_on_denial": true,
+    "posting_window": { "start": "01:00", "end": "23:00" },
+    "random_delay_minutes": { "min": 20, "max": 45 }
   },
   "managers": [
     {
@@ -32,7 +37,7 @@
       "name": "Troy",
       "role": "manager",
       "chat_id": 8483384005,
-      "phone": "+13179385492",
+      "phone": "+13179385493",
       "instagram_handle": "irontman72",
       "salon_name": "Rejuve Salon Spa",
       "city": "Carmel, IN",
@@ -42,10 +47,10 @@
       ],
       "consent": {
         "sms_opt_in": true,
-        "timestamp": ""
+        "timestamp": "2025-10-29T15:00:00Z"
       },
       "compliance_opt_in": true,
-      "compliance_timestamp": ""
+      "compliance_timestamp": "2025-10-29T15:00:00Z"
     }
   ],
   "stylists": [
@@ -64,18 +69,18 @@
         "mens_grooming"
       ],
       "consent": {
-        "sms_opt_in": false,
-        "timestamp": ""
+        "sms_opt_in": true,
+        "timestamp": "2025-11-02T22:20:18.430Z"
       },
-      "compliance_opt_in": false,
-      "compliance_timestamp": ""
+      "compliance_opt_in": true,
+      "compliance_timestamp": "2025-11-02T22:20:18.430Z"
     },
     {
       "id": "stylist-braylinn",
       "name": "Braylinn",
       "role": "stylist",
       "chat_id": 4632067474,
-      "phone": "4632067474",
+      "phone": "+14632067474",
       "instagram_handle": "hardisterbraylinn",
       "facebook_handle": "",
       "salon_name": "Rejuve Salon Spa",
@@ -89,6 +94,20 @@
       },
       "compliance_opt_in": false,
       "compliance_timestamp": null
+    },
+    {
+      "name": "Roxanne",
+      "phone": "13179385493",
+      "instagram_handle": "Roxy",
+      "role": "stylist",
+      "specialties": [],
+      "consent": {
+        "sms_opt_in": true,
+        "timestamp": "2025-11-02T22:17:00.497Z"
+      },
+      "compliance_opt_in": true,
+      "compliance_timestamp": "2025-11-02T22:17:00.497Z"
     }
-  ]
+  ],
+  "__file": "/Users/troyhardister/mostlypostly-clean/salons/rejuvesalonspa.json"
 }
