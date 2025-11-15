@@ -3,7 +3,21 @@ import fs from "fs";
 import path from "path";
 import Database from "better-sqlite3";
 
-const DB_PATH = path.join(process.cwd(), "postly.db");
+// Decide environment
+const APP_ENV = process.env.APP_ENV || process.env.NODE_ENV || "local";
+
+// Default DB path if DB_PATH is not explicitly set
+let defaultDbPath;
+if (APP_ENV === "production") {
+  // On Render (prod), use the persistent disk
+  defaultDbPath = "/data/postly.db";
+} else {
+  // Local dev / other envs: keep DB in project root
+  defaultDbPath = path.join(process.cwd(), "postly.db");
+}
+
+// Final DB path: env wins, then env-based default
+const DB_PATH = process.env.DB_PATH || defaultDbPath;
 console.log("🗂 Using database at:", DB_PATH);
 
 // Single connection, synchronous writes
