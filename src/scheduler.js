@@ -45,6 +45,15 @@ function loadGlobalPolicy() {
   }
 }
 
+// src/scheduler.js
+const APP_ROLE = process.env.APP_ROLE || "web";
+
+if (APP_ROLE !== "worker") {
+  console.log("[SchedulerInit] Skipping scheduler init because APP_ROLE is not 'worker' (APP_ROLE =", APP_ROLE + ")");
+  // Do NOT start the scheduler in non-worker roles
+  return;
+}
+
 // Loads full salon JSON (policy + tokens live here in your structure)
 function getSalonPolicy(salonId) {
   try {
