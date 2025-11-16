@@ -12,11 +12,23 @@ import { logEvent } from "./core/analyticsDb.js";
 const log = createLogger("scheduler");
 const ROOT = process.cwd();
 const POLICY_FILE = path.join(ROOT, "data", "schedulerPolicy.json");
+
+// ENV flags
 const FORCE_POST_NOW = process.env.FORCE_POST_NOW === "1";
+const IGNORE_WINDOW = process.env.SCHEDULER_IGNORE_WINDOW === "1";
 
 // ─────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────
+
+/**
+ * Normalize a Luxon DateTime into a SQLite-friendly timestamp:
+ * "YYYY-MM-DD HH:MM:SS" (no T, no Z, no ms)
+ */
+function toSqliteTimestamp(dt) {
+  return dt.toFormat("yyyy-LL-dd HH:mm:ss");
+}
+
 function withinPostingWindow(now, window) {
   const [sH, sM] = window.start.split(":").map(Number);
   const [eH, eM] = window.end.split(":").map(Number);
@@ -77,7 +89,7 @@ async function recoverMissedPosts() {
         FROM posts
         WHERE (status='queued' OR status='failed')
           AND scheduled_for IS NOT NULL
-          AND strftime('%s', scheduled_for) < strftime('%s','now')
+          AND datetime(scheduled_for) < datetime('now')
           AND (retry_count IS NULL OR retry_count < 3)
       `)
       .all();
@@ -96,7 +108,7 @@ async function recoverMissedPosts() {
         { min: 20, max: 45 };
 
       const delay = randomDelay(range.min, range.max);
-      const newTime = now.plus({ minutes: delay }).toISO();
+      const newTime = toSqliteTimestamp(now.plus({ minutes: delay }));
 
       console.log(
         `🪵 [Recovery] ${post.id} old=${post.scheduled_for} → new=${newTime}`
@@ -135,7 +147,7 @@ export async function runSchedulerOnce() {
         FROM posts
         WHERE status='queued'
           AND scheduled_for IS NOT NULL
-          AND strftime('%s', scheduled_for) <= strftime('%s','now')
+          AND datetime(scheduled_for) <= datetime('now')
       `)
       .all()
       .map((r) => r.sid);
@@ -157,7 +169,7 @@ export async function runSchedulerOnce() {
           SELECT * FROM posts
           WHERE status='queued'
             AND scheduled_for IS NOT NULL
-            AND strftime('%s', scheduled_for) <= strftime('%s','now')
+            AND datetime(scheduled_for) <= datetime('now')
             AND COALESCE(salon_id,'__no_salon__') = ?
           ORDER BY datetime(scheduled_for) ASC
         `)
@@ -204,13 +216,15 @@ export async function runSchedulerOnce() {
         console.log(
           `🪟 [${post.id}] Posting window=${window.start}–${window.end}`
         );
-        console.log(`🪵 [${post.id}] FORCE_POST_NOW=${FORCE_POST_NOW}`);
+        console.log(
+          `🪵 [${post.id}] FORCE_POST_NOW=${FORCE_POST_NOW}, IGNORE_WINDOW=${IGNORE_WINDOW}`
+        );
 
         // If FORCE_POST_NOW=1 or SCHEDULER_IGNORE_WINDOW=1 → always post immediately
-        if (!FORCE_POST_NOW && process.env.SCHEDULER_IGNORE_WINDOW !== "1") {
+        if (!FORCE_POST_NOW && !IGNORE_WINDOW) {
           if (!withinPostingWindow(localNow, window)) {
             console.log(`⏸️ [${post.id}] Outside posting window, delaying 1h.`);
-            const retryTime = nowUtc.plus({ hours: 1 }).toISO();
+            const retryTime = toSqliteTimestamp(nowUtc.plus({ hours: 1 }));
 
             db.prepare(
               `UPDATE posts SET scheduled_for=?, status='queued' WHERE id=?`
@@ -227,10 +241,11 @@ export async function runSchedulerOnce() {
           }
         }
 
-if (process.env.SCHEDULER_IGNORE_WINDOW === "1") {
-  console.log("🟢 [Scheduler] Posting window bypassed (SCHEDULER_IGNORE_WINDOW=1)");
-}
-
+        if (IGNORE_WINDOW) {
+          console.log(
+            "🟢 [Scheduler] Posting window bypassed (SCHEDULER_IGNORE_WINDOW=1)"
+          );
+        }
 
         // publish attempt
         try {
@@ -298,7 +313,7 @@ if (process.env.SCHEDULER_IGNORE_WINDOW === "1") {
           });
         } catch (err) {
           console.error(`❌ [${post.id}] Publish failed:`, err.message);
-          const retryTime = nowUtc.plus({ minutes: 30 }).toISO();
+          const retryTime = toSqliteTimestamp(nowUtc.plus({ minutes: 30 }));
           db.prepare(
             `UPDATE posts SET status='queued', scheduled_for=? WHERE id=?`
           ).run(retryTime, post.id);
@@ -328,13 +343,12 @@ if (process.env.SCHEDULER_IGNORE_WINDOW === "1") {
 // ─────────────────────────────────────────────────────────────
 export function enqueuePost(post) {
   const policy = loadGlobalPolicy();
-  const delay = randomDelay(
-    policy.random_delay_minutes.min,
-    policy.random_delay_minutes.max
+  const range = policy.random_delay_minutes || { min: 20, max: 45 };
+  const delay = randomDelay(range.min, range.max);
+
+  const scheduled = toSqliteTimestamp(
+    DateTime.utc().plus({ minutes: delay })
   );
-  const scheduled = DateTime.utc()
-    .plus({ minutes: delay })
-    .toISO({ suppressMilliseconds: true });
 
   console.log(`🪵 [Enqueue] Post ${post.id} queued for ${scheduled} (UTC)`);
 
@@ -359,7 +373,11 @@ export function enqueuePost(post) {
   log("POST_ENQUEUED", {
     id: post.id,
     scheduled_utc: scheduled,
-    scheduled_local: DateTime.fromISO(scheduled)
+    scheduled_local: DateTime.fromFormat(
+      scheduled,
+      "yyyy-LL-dd HH:mm:ss",
+      { zone: "UTC" }
+    )
       .setZone("America/Indiana/Indianapolis")
       .toFormat("ff"),
   });
@@ -388,7 +406,9 @@ export function startScheduler() {
         );
         console.log(
           `🪵 [SchedulerInit] ${f}:`,
-          data.settings?.posting_window || "(no custom window)"
+          data.settings?.posting_window ||
+            data.salon_info?.posting_window ||
+            "(no custom window)"
         );
       } catch (err) {
         console.warn("⚠️ [SchedulerInit] Failed to parse", f, err.message);
@@ -405,23 +425,26 @@ export function startScheduler() {
     data: { window: policy.posting_window, timezone: policy.timezone },
   });
 
+  // Try to rescue anything in the past
   recoverMissedPosts();
+
   // ===============================
   // Scheduler Polling Interval (ENV based)
   // ===============================
   const DEFAULT_INTERVAL = 900; // 15 minutes
-  const intervalSeconds = Number(process.env.SCHEDULER_INTERVAL_SECONDS) || DEFAULT_INTERVAL;
+  const intervalSeconds =
+    Number(process.env.SCHEDULER_INTERVAL_SECONDS) || DEFAULT_INTERVAL;
 
   console.log(`🕓 [Scheduler] Interval active: every ${intervalSeconds}s`);
 
   setInterval(async () => {
     try {
-      await runSchedulerOnce(); // <-- your real scheduler tick function
+      await runSchedulerOnce();
     } catch (err) {
       console.error("❌ [Scheduler] Tick error:", err);
     }
   }, intervalSeconds * 1000);
+}
 
-  }
-
+// Keep this for instagram publisher imports
 export { getSalonPolicy };
