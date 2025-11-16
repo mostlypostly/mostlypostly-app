@@ -14,6 +14,36 @@ const ROOT = process.cwd();
 const POLICY_FILE = path.join(ROOT, "data", "schedulerPolicy.json");
 const FORCE_POST_NOW = process.env.FORCE_POST_NOW === "1";
 
+// =============================================================
+// 🔐 APP_ROLE guard — SAFE FOR WEB MODE
+// =============================================================
+const APP_ROLE = process.env.APP_ROLE || "web";
+
+if (APP_ROLE !== "worker") {
+  console.log(
+    `[SchedulerInit] Skipping scheduler init because APP_ROLE="${APP_ROLE}"`
+  );
+  // Export NO-OP functions to keep imports safe
+  export function enqueuePost(post) {
+    console.log(
+      `[SchedulerInit] enqueuePost called in APP_ROLE="${APP_ROLE}" — ignoring`
+    );
+    return post;
+  }
+  export async function runSchedulerOnce() {
+    return { ok: false, skipped: true, reason: "APP_ROLE is not worker" };
+  }
+  export function startScheduler() {
+    console.log(
+      `[SchedulerInit] startScheduler() ignored because APP_ROLE="${APP_ROLE}"`
+    );
+  }
+  // STOP loading the rest of the file
+} else {
+// =============================================================
+// 🟢 WORKER MODE — FULL SCHEDULER BELOW THIS LINE
+// =============================================================
+
 // ─────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────
@@ -45,16 +75,7 @@ function loadGlobalPolicy() {
   }
 }
 
-// src/scheduler.js
-const APP_ROLE = process.env.APP_ROLE || "web";
-
-if (APP_ROLE !== "worker") {
-  console.log("[SchedulerInit] Skipping scheduler init because APP_ROLE is not 'worker' (APP_ROLE =", APP_ROLE + ")");
-  // Do NOT start the scheduler in non-worker roles
-  return;
-}
-
-// Loads full salon JSON (policy + tokens live here in your structure)
+// Loads full salon JSON (policy + tokens live here)
 function getSalonPolicy(salonId) {
   try {
     if (!salonId) return {};
@@ -137,7 +158,6 @@ async function recoverMissedPosts() {
 // ─────────────────────────────────────────────────────────────
 export async function runSchedulerOnce() {
   try {
-    // Get salons that currently have due posts
     const tenants = db
       .prepare(`
         SELECT DISTINCT COALESCE(salon_id, '__no_salon__') AS sid
@@ -160,7 +180,6 @@ export async function runSchedulerOnce() {
     const nowUtc = DateTime.utc();
 
     for (const salonId of tenants) {
-      // Pull this salon's due posts in order
       const due = db
         .prepare(`
           SELECT * FROM posts
@@ -182,7 +201,6 @@ export async function runSchedulerOnce() {
         console.log("🪵 [Scheduler] ----------------------------");
         console.log("🪵 [Scheduler] Inspecting post:", post);
 
-        // Merge policy (prefer salon, then global)
         const salonPolicy = getSalonPolicy(post.salon_id) || {};
         const globalPolicy = loadGlobalPolicy();
 
@@ -201,22 +219,9 @@ export async function runSchedulerOnce() {
           globalPolicy.timezone ||
           "UTC";
 
-        console.log(
-          "🪵 [Scheduler] Merged policy:",
-          JSON.stringify({ window, tz }, null, 2)
-        );
-
         const localNow = nowUtc.setZone(tz);
-        console.log(
-          `🧮 [${post.id}] Local time=${localNow.toFormat("ff")} tz=${tz}`
-        );
-        console.log(
-          `🪟 [${post.id}] Posting window=${window.start}–${window.end}`
-        );
-        console.log(`🪵 [${post.id}] FORCE_POST_NOW=${FORCE_POST_NOW}`);
 
         if (!FORCE_POST_NOW && !withinPostingWindow(localNow, window)) {
-          console.log(`⏸️ [${post.id}] Outside posting window, delaying 1h.`);
           const retryTime = nowUtc.plus({ hours: 1 }).toISO();
           db.prepare(
             `UPDATE posts SET scheduled_for=?, status='queued' WHERE id=?`
@@ -231,22 +236,17 @@ export async function runSchedulerOnce() {
           continue;
         }
 
-        // publish attempt
         try {
           const image =
             post.image_url && post.image_url.includes("api.twilio.com")
               ? await rehostTwilioMedia(post.image_url, post.salon_id)
               : post.image_url;
 
-          console.log(`🪵 [${post.id}] Image resolved: ${image}`);
-
-          const salonConfig = getSalonPolicy(post.salon_id) || {};
           const fbPageId =
-            salonConfig?.salon_info?.facebook_page_id ||
-            process.env.FACEBOOK_PAGE_ID ||
-            "118354306723";
+            salonPolicy?.salon_info?.facebook_page_id ||
+            process.env.FACEBOOK_PAGE_ID;
           const fbToken =
-            salonConfig?.salon_info?.facebook_page_token || null;
+            salonPolicy?.salon_info?.facebook_page_token || null;
 
           logEvent({
             event: "scheduler_attempt_publish",
@@ -255,7 +255,6 @@ export async function runSchedulerOnce() {
             data: { fbPageId, image },
           });
 
-          // 🔑 Pass both pageId + salon-specific token into FB publisher
           const fbResp = await publishToFacebook(
             fbPageId,
             post.final_caption,
@@ -268,12 +267,6 @@ export async function runSchedulerOnce() {
             caption: post.final_caption,
           });
 
-          console.log(
-            `🪵 [${post.id}] FB resp=${JSON.stringify(
-              fbResp
-            )}, IG resp=${JSON.stringify(igResp)}`
-          );
-
           db.prepare(
             `UPDATE posts
                SET status='published',
@@ -281,8 +274,6 @@ export async function runSchedulerOnce() {
                    published_at=datetime('now','utc')
              WHERE id=?`
           ).run(fbResp?.post_id || null, igResp?.id || null, post.id);
-
-          console.log(`✅ [${post.id}] Published successfully.`);
 
           logEvent({
             event: "post_published",
@@ -296,7 +287,6 @@ export async function runSchedulerOnce() {
             },
           });
         } catch (err) {
-          console.error(`❌ [${post.id}] Publish failed:`, err.message);
           const retryTime = nowUtc.plus({ minutes: 30 }).toISO();
           db.prepare(
             `UPDATE posts SET status='queued', scheduled_for=? WHERE id=?`
@@ -308,15 +298,12 @@ export async function runSchedulerOnce() {
             post_id: post.id,
             data: { error: err.message, retry_for: retryTime },
           });
-
-          console.log(`🪵 [${post.id}] Retry scheduled_for=${retryTime}`);
         }
       }
     }
 
     return { ok: true, message: "Scheduler processed due posts per tenant." };
   } catch (err) {
-    console.error("❌ [Scheduler] runSchedulerOnce failed:", err);
     logEvent({ event: "scheduler_error", data: { error: err.message } });
     return { ok: false, error: err.message };
   }
@@ -335,8 +322,6 @@ export function enqueuePost(post) {
     .plus({ minutes: delay })
     .toISO({ suppressMilliseconds: true });
 
-  console.log(`🪵 [Enqueue] Post ${post.id} queued for ${scheduled} (UTC)`);
-
   db.prepare(
     `
     UPDATE posts
@@ -353,47 +338,11 @@ export function enqueuePost(post) {
     data: { scheduled_for: scheduled },
   });
 
-  console.log(`🕓 [Scheduler] Normalized UTC time stored: ${scheduled}`);
-
-  log("POST_ENQUEUED", {
-    id: post.id,
-    scheduled_utc: scheduled,
-    scheduled_local: DateTime.fromISO(scheduled)
-      .setZone("America/Indiana/Indianapolis")
-      .toFormat("ff"),
-  });
-
   return { ...post, scheduled_for: scheduled, status: "queued" };
 }
 
 export function startScheduler() {
   const policy = loadGlobalPolicy();
-  console.log(
-    "🪵 [SchedulerInit] Global policy:",
-    policy.posting_window,
-    policy.timezone
-  );
-
-  const salonsDir = path.join(process.cwd(), "salons");
-  if (fs.existsSync(salonsDir)) {
-    const files = fs.readdirSync(salonsDir).filter((f) => f.endsWith(".json"));
-    console.log(
-      `🪵 [SchedulerInit] Found ${files.length} salon file(s).`
-    );
-    for (const f of files) {
-      try {
-        const data = JSON.parse(
-          fs.readFileSync(path.join(salonsDir, f), "utf8")
-        );
-        console.log(
-          `🪵 [SchedulerInit] ${f}:`,
-          data.settings?.posting_window || "(no custom window)"
-        );
-      } catch (err) {
-        console.warn("⚠️ [SchedulerInit] Failed to parse", f, err.message);
-      }
-    }
-  }
 
   log("SCHEDULER_START", {
     window: policy.posting_window,
@@ -414,3 +363,5 @@ export function startScheduler() {
 }
 
 export { getSalonPolicy };
+
+} // <-- END OF APP_ROLE WORKER MODE WRAPPER
