@@ -17,7 +17,6 @@ import { createLogger } from "./src/utils/logHelper.js";
 import { lookupStylist } from "./src/core/salonLookup.js";
 
 
-
 // =====================================================
 // DB FIRST — load SQLite and open connection
 // =====================================================
