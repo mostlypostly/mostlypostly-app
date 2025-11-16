@@ -334,12 +334,19 @@ io.on("connection", (s) => {
   s.on("disconnect", () => console.log("🔴 Dashboard disconnected:", s.id));
 });
 
-// ======================================================
-// Start Server
-// ======================================================
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
- console.log(`🚀 MostlyPostly ready on http://localhost:${PORT}`);
- console.log("💡 Health check:", `http://localhost:${PORT}/healthz`);
- console.log("💇 Public uploads:", `http://localhost:${PORT}/uploads/`);
+// ------------------------------------------------------
+// 🗓️ Scheduler bootstrapping — ALWAYS RUN IN WEB SERVICE
+// ------------------------------------------------------
+import { startScheduler } from "./src/scheduler.js";
+
+// Start scheduler unconditionally in web service
+console.log("WEB MODE: Scheduler enabled (single-service mode).");
+startScheduler();
+
+// ------------------------------------------------------
+// 🚀 Start server
+// ------------------------------------------------------
+app.listen(PORT, () => {
+  console.log(`🚀 MostlyPostly ready at ${process.env.BASE_URL || "http://localhost:" + PORT}`);
+  console.log(`💡 Health check: http://localhost:${PORT}/healthz`);
 });

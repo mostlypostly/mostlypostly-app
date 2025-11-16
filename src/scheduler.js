@@ -1,4 +1,5 @@
-// src/scheduler.js — MostlyPostly v1.1 (per-salon batching, DB + Analytics Integration)
+// src/scheduler.js — Final Web-Only Scheduler (no worker needed)
+
 import fs from "fs";
 import path from "path";
 import { DateTime } from "luxon";
@@ -11,20 +12,13 @@ import { logEvent } from "./core/analyticsDb.js";
 
 const log = createLogger("scheduler");
 const ROOT = process.cwd();
-const POLICY_FILE = path.join(ROOT, "data", "schedulerPolicy.json");
 
 // ENV flags
 const FORCE_POST_NOW = process.env.FORCE_POST_NOW === "1";
 const IGNORE_WINDOW = process.env.SCHEDULER_IGNORE_WINDOW === "1";
 
-// ─────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────
+// ===================== Helpers =====================
 
-/**
- * Normalize a Luxon DateTime into a SQLite-friendly timestamp:
- * "YYYY-MM-DD HH:MM:SS" (no T, no Z, no ms)
- */
 function toSqliteTimestamp(dt) {
   return dt.toFormat("yyyy-LL-dd HH:mm:ss");
 }
@@ -43,8 +37,9 @@ function randomDelay(min, max) {
 
 function loadGlobalPolicy() {
   try {
-    const json = JSON.parse(fs.readFileSync(POLICY_FILE, "utf8"));
-    console.log("🪵 [GlobalPolicy] Loaded from data/schedulerPolicy.json:", json);
+    const file = path.join(ROOT, "data", "schedulerPolicy.json");
+    const json = JSON.parse(fs.readFileSync(file, "utf8"));
+    console.log("🪵 [GlobalPolicy] Loaded:", json);
     return json;
   } catch {
     const fallback = {
@@ -52,40 +47,33 @@ function loadGlobalPolicy() {
       random_delay_minutes: { min: 20, max: 45 },
       timezone: "America/Indiana/Indianapolis",
     };
-    console.log("🪵 [GlobalPolicy] Using fallback:", fallback);
+    console.log("🪵 [GlobalPolicy] Fallback:", fallback);
     return fallback;
   }
 }
 
-// Loads full salon JSON (policy + tokens live here in your structure)
 function getSalonPolicy(salonId) {
   try {
     if (!salonId) return {};
     const salonsDir = path.join(ROOT, "salons");
-    const normalized = String(salonId).replace(/[^a-z0-9]/gi, "").toLowerCase();
+    const normalized = String(salonId).toLowerCase();
     const files = fs.readdirSync(salonsDir);
-    const match = files.find((f) => f.toLowerCase().includes(normalized));
-    if (!match) {
-      console.warn(`⚠️ [PolicyLoad] No salon config matched '${salonId}'`);
-      return {};
-    }
-    const fullPath = path.join(salonsDir, match);
-    const data = JSON.parse(fs.readFileSync(fullPath, "utf8"));
-    return data;
-  } catch (err) {
-    console.warn("⚠️ [PolicyLoad] Failed:", salonId, err.message);
+    const file = files.find((f) => f.toLowerCase().includes(normalized));
+    if (!file) return {};
+
+    return JSON.parse(fs.readFileSync(path.join(salonsDir, file), "utf8"));
+  } catch {
     return {};
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// 🔁 Recover missed posts
-// ─────────────────────────────────────────────────────────────
+// ===================== Recovery =====================
+
 async function recoverMissedPosts() {
   try {
     const missed = db
       .prepare(`
-        SELECT id, stylist_name, salon_id, scheduled_for, status, retry_count
+        SELECT id, salon_id, scheduled_for, status, retry_count
         FROM posts
         WHERE (status='queued' OR status='failed')
           AND scheduled_for IS NOT NULL
@@ -95,356 +83,190 @@ async function recoverMissedPosts() {
       .all();
 
     if (!missed.length) return;
-    console.log(`🔁 [Recovery] ${missed.length} post(s) detected.`);
+
+    console.log(`🔁 [Recovery] ${missed.length} overdue post(s)`);
 
     const now = DateTime.utc();
     for (const post of missed) {
-      const salonPolicy = getSalonPolicy(post.salon_id);
-      const globalPolicy = loadGlobalPolicy();
-      const range =
-        salonPolicy.random_delay_minutes ||
-        salonPolicy.salon_info?.random_delay_minutes ||
-        globalPolicy.random_delay_minutes ||
-        { min: 20, max: 45 };
-
+      const policy = loadGlobalPolicy();
+      const range = policy.random_delay_minutes || { min: 20, max: 45 };
       const delay = randomDelay(range.min, range.max);
       const newTime = toSqliteTimestamp(now.plus({ minutes: delay }));
 
-      console.log(
-        `🪵 [Recovery] ${post.id} old=${post.scheduled_for} → new=${newTime}`
-      );
-
       db.prepare(
-        `
-        UPDATE posts
-        SET scheduled_for=?, status='queued',
-            retry_count=COALESCE(retry_count,0)+1
-        WHERE id=?
-      `
+        `UPDATE posts
+         SET scheduled_for=?, status='queued',
+             retry_count = COALESCE(retry_count,0)+1
+         WHERE id=?`
       ).run(newTime, post.id);
 
       logEvent({
         event: "scheduler_recovered_post",
-        post_id: post.id,
         salon_id: post.salon_id,
-        data: { old_time: post.scheduled_for, new_time: newTime },
+        post_id: post.id,
+        data: { newTime },
       });
     }
   } catch (err) {
-    console.error("❌ [Recovery] Failed:", err.message);
+    console.error("❌ [Recovery] Failed:", err);
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// 🚀 Publish due posts (per-salon batching)
-// ─────────────────────────────────────────────────────────────
+// ===================== Core Run =====================
+
 export async function runSchedulerOnce() {
   try {
-    // Get salons that currently have due posts
     const tenants = db
       .prepare(`
-        SELECT DISTINCT COALESCE(salon_id, '__no_salon__') AS sid
+        SELECT DISTINCT salon_id
         FROM posts
         WHERE status='queued'
           AND scheduled_for IS NOT NULL
           AND datetime(scheduled_for) <= datetime('now')
       `)
       .all()
-      .map((r) => r.sid);
+      .map((r) => r.salon_id);
 
     if (!tenants.length) {
       console.log("✅ [Scheduler] No queued posts due right now.");
-      return { ok: true, message: "No queued posts due right now." };
+      return;
     }
 
-    console.log(`⚡ [Scheduler] Tenants with due posts: ${tenants.join(", ")}`);
-    logEvent({ event: "scheduler_run", data: { tenants: tenants.length } });
-
     const nowUtc = DateTime.utc();
-
     for (const salonId of tenants) {
-      // Pull this salon's due posts in order
       const due = db
         .prepare(`
           SELECT * FROM posts
           WHERE status='queued'
             AND scheduled_for IS NOT NULL
             AND datetime(scheduled_for) <= datetime('now')
-            AND COALESCE(salon_id,'__no_salon__') = ?
+            AND salon_id = ?
           ORDER BY datetime(scheduled_for) ASC
         `)
         .all(salonId);
 
       if (!due.length) continue;
 
-      console.log(
-        `🪵 [Scheduler] Processing ${due.length} post(s) for salon_id=${salonId}`
-      );
+      console.log(`⚡ [Scheduler] ${due.length} due for ${salonId}`);
 
       for (const post of due) {
-        console.log("🪵 [Scheduler] ----------------------------");
-        console.log("🪵 [Scheduler] Inspecting post:", post);
-
-        // Merge policy (prefer salon, then global)
-        const salonPolicy = getSalonPolicy(post.salon_id) || {};
+        const salonPolicy = getSalonPolicy(post.salon_id);
         const globalPolicy = loadGlobalPolicy();
 
         const window =
-          salonPolicy.posting_window ||
-          salonPolicy.salon_info?.posting_window ||
-          globalPolicy.posting_window ||
-          { start: "09:00", end: "19:00" };
+          salonPolicy?.posting_window ||
+          salonPolicy?.salon_info?.posting_window ||
+          globalPolicy.posting_window;
 
         const tz =
-          salonPolicy.timezone ||
-          salonPolicy.salon_info?.timezone ||
-          (post.city?.includes("Indiana")
-            ? "America/Indiana/Indianapolis"
-            : null) ||
-          globalPolicy.timezone ||
-          "UTC";
-
-        console.log(
-          "🪵 [Scheduler] Merged policy:",
-          JSON.stringify({ window, tz }, null, 2)
-        );
+          salonPolicy?.timezone ||
+          salonPolicy?.salon_info?.timezone ||
+          globalPolicy.timezone;
 
         const localNow = nowUtc.setZone(tz);
-        console.log(
-          `🧮 [${post.id}] Local time=${localNow.toFormat("ff")} tz=${tz}`
-        );
-        console.log(
-          `🪟 [${post.id}] Posting window=${window.start}–${window.end}`
-        );
-        console.log(
-          `🪵 [${post.id}] FORCE_POST_NOW=${FORCE_POST_NOW}, IGNORE_WINDOW=${IGNORE_WINDOW}`
-        );
 
-        // If FORCE_POST_NOW=1 or SCHEDULER_IGNORE_WINDOW=1 → always post immediately
-        if (!FORCE_POST_NOW && !IGNORE_WINDOW) {
+        if (!IGNORE_WINDOW && !FORCE_POST_NOW) {
           if (!withinPostingWindow(localNow, window)) {
-            console.log(`⏸️ [${post.id}] Outside posting window, delaying 1h.`);
-            const retryTime = toSqliteTimestamp(nowUtc.plus({ hours: 1 }));
+            const retry = toSqliteTimestamp(nowUtc.plus({ hours: 1 }));
+            console.log(`⏸️ [${post.id}] Outside window → ${retry}`);
 
             db.prepare(
               `UPDATE posts SET scheduled_for=?, status='queued' WHERE id=?`
-            ).run(retryTime, post.id);
-
-            logEvent({
-              event: "scheduler_delay_outside_window",
-              salon_id: post.salon_id,
-              post_id: post.id,
-              data: { retry_for: retryTime, tz },
-            });
-
+            ).run(retry, post.id);
             continue;
           }
         }
 
         if (IGNORE_WINDOW) {
-          console.log(
-            "🟢 [Scheduler] Posting window bypassed (SCHEDULER_IGNORE_WINDOW=1)"
-          );
+          console.log("🟢 [Scheduler] Posting window bypassed");
         }
 
-        // publish attempt
         try {
           const image =
-            post.image_url && post.image_url.includes("api.twilio.com")
+            post.image_url?.includes("api.twilio.com")
               ? await rehostTwilioMedia(post.image_url, post.salon_id)
               : post.image_url;
 
-          console.log(`🪵 [${post.id}] Image resolved: ${image}`);
-
-          const salonConfig = getSalonPolicy(post.salon_id) || {};
+          const salonCfg = getSalonPolicy(post.salon_id);
           const fbPageId =
-            salonConfig?.salon_info?.facebook_page_id ||
-            process.env.FACEBOOK_PAGE_ID ||
-            "118354306723";
-          const fbToken =
-            salonConfig?.salon_info?.facebook_page_token || null;
+            salonCfg?.salon_info?.facebook_page_id ||
+            process.env.FACEBOOK_PAGE_ID;
+          const fbToken = salonCfg?.salon_info?.facebook_page_token;
 
-          logEvent({
-            event: "scheduler_attempt_publish",
-            salon_id: post.salon_id,
-            post_id: post.id,
-            data: { fbPageId, image },
-          });
-
-          // 🔑 Pass both pageId + salon-specific token into FB publisher
           const fbResp = await publishToFacebook(
             fbPageId,
             post.final_caption,
             image,
             fbToken
           );
+
           const igResp = await publishToInstagram({
             salon_id: post.salon_id,
             imageUrl: image,
             caption: post.final_caption,
           });
 
-          console.log(
-            `🪵 [${post.id}] FB resp=${JSON.stringify(
-              fbResp
-            )}, IG resp=${JSON.stringify(igResp)}`
-          );
-
           db.prepare(
             `UPDATE posts
-               SET status='published',
-                   fb_post_id=?, ig_media_id=?,
-                   published_at=datetime('now','utc')
+             SET status='published',
+                 fb_post_id=?, ig_media_id=?,
+                 published_at=datetime('now','utc')
              WHERE id=?`
-          ).run(fbResp?.post_id || null, igResp?.id || null, post.id);
+          ).run(fbResp?.post_id, igResp?.id, post.id);
 
-          console.log(`✅ [${post.id}] Published successfully.`);
-
-          logEvent({
-            event: "post_published",
-            salon_id: post.salon_id,
-            post_id: post.id,
-            data: {
-              facebook: fbResp || null,
-              instagram: igResp || null,
-              image_used: image,
-              scheduled_for: post.scheduled_for,
-            },
-          });
+          console.log(`✅ [${post.id}] Published`);
         } catch (err) {
-          console.error(`❌ [${post.id}] Publish failed:`, err.message);
-          const retryTime = toSqliteTimestamp(nowUtc.plus({ minutes: 30 }));
+          console.error(`❌ [${post.id}] Failed:`, err.message);
+          const retry = toSqliteTimestamp(nowUtc.plus({ minutes: 30 }));
           db.prepare(
             `UPDATE posts SET status='queued', scheduled_for=? WHERE id=?`
-          ).run(retryTime, post.id);
-
-          logEvent({
-            event: "post_publish_failed",
-            salon_id: post.salon_id,
-            post_id: post.id,
-            data: { error: err.message, retry_for: retryTime },
-          });
-
-          console.log(`🪵 [${post.id}] Retry scheduled_for=${retryTime}`);
+          ).run(retry, post.id);
         }
       }
     }
-
-    return { ok: true, message: "Scheduler processed due posts per tenant." };
   } catch (err) {
-    console.error("❌ [Scheduler] runSchedulerOnce failed:", err);
-    logEvent({ event: "scheduler_error", data: { error: err.message } });
-    return { ok: false, error: err.message };
+    console.error("❌ Scheduler error:", err);
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// ⏱️ Enqueue + loop starter
-// ─────────────────────────────────────────────────────────────
+// ===================== Enqueue =====================
+
 export function enqueuePost(post) {
   const policy = loadGlobalPolicy();
   const range = policy.random_delay_minutes || { min: 20, max: 45 };
   const delay = randomDelay(range.min, range.max);
-
-  const scheduled = toSqliteTimestamp(
-    DateTime.utc().plus({ minutes: delay })
-  );
-
-  console.log(`🪵 [Enqueue] Post ${post.id} queued for ${scheduled} (UTC)`);
+  const scheduled = toSqliteTimestamp(DateTime.utc().plus({ minutes: delay }));
 
   db.prepare(
-    `
-    UPDATE posts
-    SET status='queued',
-        scheduled_for = ?
-    WHERE id = ?
-  `
+    `UPDATE posts SET status='queued', scheduled_for=? WHERE id=?`
   ).run(scheduled, post.id);
 
-  logEvent({
-    event: "post_enqueued",
-    salon_id: post.salon_id || null,
-    post_id: post.id,
-    data: { scheduled_for: scheduled },
-  });
-
-  console.log(`🕓 [Scheduler] Normalized UTC time stored: ${scheduled}`);
-
-  log("POST_ENQUEUED", {
-    id: post.id,
-    scheduled_utc: scheduled,
-    scheduled_local: DateTime.fromFormat(
-      scheduled,
-      "yyyy-LL-dd HH:mm:ss",
-      { zone: "UTC" }
-    )
-      .setZone("America/Indiana/Indianapolis")
-      .toFormat("ff"),
-  });
-
-  return { ...post, scheduled_for: scheduled, status: "queued" };
+  console.log(`🪵 [Enqueue] ${post.id} → ${scheduled}`);
+  return { ...post, status: "queued", scheduled_for: scheduled };
 }
+
+// ===================== Boot =====================
 
 export function startScheduler() {
   const policy = loadGlobalPolicy();
-  console.log(
-    "🪵 [SchedulerInit] Global policy:",
-    policy.posting_window,
-    policy.timezone
-  );
-
-  const salonsDir = path.join(process.cwd(), "salons");
-  if (fs.existsSync(salonsDir)) {
-    const files = fs.readdirSync(salonsDir).filter((f) => f.endsWith(".json"));
-    console.log(
-      `🪵 [SchedulerInit] Found ${files.length} salon file(s).`
-    );
-    for (const f of files) {
-      try {
-        const data = JSON.parse(
-          fs.readFileSync(path.join(salonsDir, f), "utf8")
-        );
-        console.log(
-          `🪵 [SchedulerInit] ${f}:`,
-          data.settings?.posting_window ||
-            data.salon_info?.posting_window ||
-            "(no custom window)"
-        );
-      } catch (err) {
-        console.warn("⚠️ [SchedulerInit] Failed to parse", f, err.message);
-      }
-    }
-  }
 
   log("SCHEDULER_START", {
     window: policy.posting_window,
     timezone: policy.timezone,
   });
-  logEvent({
-    event: "scheduler_start",
-    data: { window: policy.posting_window, timezone: policy.timezone },
-  });
 
-  // Try to rescue anything in the past
   recoverMissedPosts();
 
-  // ===============================
-  // Scheduler Polling Interval (ENV based)
-  // ===============================
-  const DEFAULT_INTERVAL = 900; // 15 minutes
+  const DEFAULT_INTERVAL = 900;
   const intervalSeconds =
     Number(process.env.SCHEDULER_INTERVAL_SECONDS) || DEFAULT_INTERVAL;
 
   console.log(`🕓 [Scheduler] Interval active: every ${intervalSeconds}s`);
 
   setInterval(async () => {
-    try {
-      await runSchedulerOnce();
-    } catch (err) {
-      console.error("❌ [Scheduler] Tick error:", err);
-    }
+    await runSchedulerOnce();
   }, intervalSeconds * 1000);
 }
 
-// Keep this for instagram publisher imports
+// Required by instagram publisher
 export { getSalonPolicy };
