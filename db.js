@@ -2,6 +2,12 @@
 import fs from "fs";
 import path from "path";
 import Database from "better-sqlite3";
+import { fileURLToPath } from "url";
+import { dirname } from "path";
+
+// Determine file paths safely in ESM
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // Decide environment
 const APP_ENV = process.env.APP_ENV || process.env.NODE_ENV || "local";
@@ -20,27 +26,36 @@ if (APP_ENV === "production") {
 const DB_PATH = process.env.DB_PATH || defaultDbPath;
 console.log("🗂 Using database at:", DB_PATH);
 
-// Single connection, synchronous writes
+// Open SQLite connection
 export const db = new Database(DB_PATH, {
   timeout: 10000,
   verbose: null,
 });
 
-// Auto-create/verify schema on first run (idempotent)
+// =====================================================
+// LOAD schema.sql RELIABLY in all environments
+// =====================================================
+
+// schema.sql sits in the SAME directory as db.js in Render
+// (because Render unpacks your repo directly into /opt/render/project/src/)
+const schemaPath = path.join(__dirname, "schema.sql");
+console.log("🔍 Looking for schema.sql at:", schemaPath);
+
 try {
-  const schemaPath = path.join(process.cwd(), "schema.sql");
   if (fs.existsSync(schemaPath)) {
-    const schema = fs.readFileSync(schemaPath, "utf8");
-    db.exec(schema);
-    console.log("✅ MostlyPostly schema initialized or verified.");
+    const raw = fs.readFileSync(schemaPath, "utf8");
+    db.exec(raw); // apply schema
+    console.log("✅ schema.sql applied successfully");
   } else {
-    console.log("ℹ️ schema.sql not found — skipping auto-init.");
+    console.error("❌ schema.sql NOT FOUND at:", schemaPath);
   }
 } catch (e) {
-  console.error("⚠️ Failed to apply schema.sql:", e.message);
+  console.error("❌ Failed applying schema.sql:", e.message);
 }
 
+// =====================================================
 // Recommended PRAGMAs
+// =====================================================
 try {
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = FULL");
@@ -48,17 +63,25 @@ try {
   console.warn("⚠️ Failed to set PRAGMAs:", e.message);
 }
 
-// Minimal legacy bootstrap (safe if schema already created)
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS manager_tokens (
-    token TEXT PRIMARY KEY,
-    salon_id TEXT,
-    manager_phone TEXT,
-    expires_at TEXT
-  )
-`).run();
+// =====================================================
+// Minimal legacy bootstrap
+// =====================================================
+try {
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS manager_tokens (
+      token TEXT PRIMARY KEY,
+      salon_id TEXT,
+      manager_phone TEXT,
+      expires_at TEXT
+    );
+  `).run();
+} catch (e) {
+  console.error("⚠️ Failed creating manager_tokens:", e.message);
+}
 
-// Helper used by messageRouter.js to confirm token insert visibility
+// =====================================================
+// Helper: verify token 
+// =====================================================
 export function verifyTokenRow(token) {
   try {
     const row = db.prepare(
