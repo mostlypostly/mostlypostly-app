@@ -1,4 +1,5 @@
-// src/scheduler.js — MostlyPostly v1.1 (per-salon batching, DB + Analytics Integration)
+// src/scheduler.js — MostlyPostly Scheduler (Worker Only Execution)
+
 import fs from "fs";
 import path from "path";
 import { DateTime } from "luxon";
@@ -9,359 +10,257 @@ import { publishToFacebook } from "./publishers/facebook.js";
 import { publishToInstagram } from "./publishers/instagram.js";
 import { logEvent } from "./core/analyticsDb.js";
 
+// ============================================================================
+// 🔐 APP_ROLE guard
+// ============================================================================
+const APP_ROLE = process.env.APP_ROLE || "web";
+const isWorker = APP_ROLE === "worker";
+
 const log = createLogger("scheduler");
 const ROOT = process.cwd();
 const POLICY_FILE = path.join(ROOT, "data", "schedulerPolicy.json");
 const FORCE_POST_NOW = process.env.FORCE_POST_NOW === "1";
 
-// =============================================================
-// 🔐 APP_ROLE guard — SAFE FOR WEB MODE
-// =============================================================
-const APP_ROLE = process.env.APP_ROLE || "web";
+// ============================================================================
+// 🔧 BASE EXPORTS (WEB MODE uses these stubs)
+// ============================================================================
 
-if (APP_ROLE !== "worker") {
-  console.log(
-    `[SchedulerInit] Skipping scheduler init because APP_ROLE="${APP_ROLE}"`
-  );
-  // Export NO-OP functions to keep imports safe
-  export function enqueuePost(post) {
-    console.log(
-      `[SchedulerInit] enqueuePost called in APP_ROLE="${APP_ROLE}" — ignoring`
-    );
-    return post;
+let enqueuePost = function (post) {
+  console.log(`[SchedulerInit] enqueuePost ignored in web mode`);
+  return post;
+};
+
+let runSchedulerOnce = async function () {
+  console.log(`[SchedulerInit] runSchedulerOnce ignored in web mode`);
+  return { ok: false, skipped: true };
+};
+
+let startScheduler = function () {
+  console.log(`[SchedulerInit] startScheduler ignored in web mode`);
+};
+
+export { enqueuePost, runSchedulerOnce, startScheduler };
+
+// ============================================================================
+// 🟢 WORKER MODE — replace stubs with real implementations
+// ============================================================================
+if (isWorker) {
+  console.log(`[SchedulerInit] Worker mode enabled — scheduler active.`);
+
+  // ------------------------------
+  // UTILITIES
+  // ------------------------------
+  function withinPostingWindow(now, window) {
+    const [sH, sM] = window.start.split(":").map(Number);
+    const [eH, eM] = window.end.split(":").map(Number);
+    const start = now.set({ hour: sH, minute: sM });
+    const end = now.set({ hour: eH, minute: eM });
+    return now >= start && now <= end;
   }
-  export async function runSchedulerOnce() {
-    return { ok: false, skipped: true, reason: "APP_ROLE is not worker" };
+
+  function randomDelay(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
   }
-  export function startScheduler() {
-    console.log(
-      `[SchedulerInit] startScheduler() ignored because APP_ROLE="${APP_ROLE}"`
-    );
+
+  function loadGlobalPolicy() {
+    try {
+      const json = JSON.parse(fs.readFileSync(POLICY_FILE, "utf8"));
+      console.log("🪵 [GlobalPolicy] Loaded:", json);
+      return json;
+    } catch {
+      const fallback = {
+        posting_window: { start: "09:00", end: "19:00" },
+        random_delay_minutes: { min: 20, max: 45 },
+        timezone: "America/Indiana/Indianapolis",
+      };
+      console.log("🪵 [GlobalPolicy] Using fallback:", fallback);
+      return fallback;
+    }
   }
-  // STOP loading the rest of the file
-} else {
-// =============================================================
-// 🟢 WORKER MODE — FULL SCHEDULER BELOW THIS LINE
-// =============================================================
 
-// ─────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────
-function withinPostingWindow(now, window) {
-  const [sH, sM] = window.start.split(":").map(Number);
-  const [eH, eM] = window.end.split(":").map(Number);
-  const start = now.set({ hour: sH, minute: sM });
-  const end = now.set({ hour: eH, minute: eM });
-  return now >= start && now <= end;
-}
-
-function randomDelay(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-function loadGlobalPolicy() {
-  try {
-    const json = JSON.parse(fs.readFileSync(POLICY_FILE, "utf8"));
-    console.log("🪵 [GlobalPolicy] Loaded from data/schedulerPolicy.json:", json);
-    return json;
-  } catch {
-    const fallback = {
-      posting_window: { start: "09:00", end: "19:00" },
-      random_delay_minutes: { min: 20, max: 45 },
-      timezone: "America/Indiana/Indiana polis",
-    };
-    console.log("🪵 [GlobalPolicy] Using fallback:", fallback);
-    return fallback;
-  }
-}
-
-// Loads full salon JSON (policy + tokens live here)
-function getSalonPolicy(salonId) {
-  try {
-    if (!salonId) return {};
-    const salonsDir = path.join(ROOT, "salons");
-    const normalized = String(salonId).replace(/[^a-z0-9]/gi, "").toLowerCase();
-    const files = fs.readdirSync(salonsDir);
-    const match = files.find((f) => f.toLowerCase().includes(normalized));
-    if (!match) {
-      console.warn(`⚠️ [PolicyLoad] No salon config matched '${salonId}'`);
+  function getSalonPolicy(salonId) {
+    try {
+      if (!salonId) return {};
+      const salonsDir = path.join(ROOT, "salons");
+      const normalized = salonId.toLowerCase();
+      const file = fs
+        .readdirSync(salonsDir)
+        .find((f) => f.toLowerCase().includes(normalized));
+      if (!file) return {};
+      return JSON.parse(fs.readFileSync(path.join(salonsDir, file), "utf8"));
+    } catch {
       return {};
     }
-    const fullPath = path.join(salonsDir, match);
-    const data = JSON.parse(fs.readFileSync(fullPath, "utf8"));
-    return data;
-  } catch (err) {
-    console.warn("⚠️ [PolicyLoad] Failed:", salonId, err.message);
-    return {};
   }
-}
 
-// ─────────────────────────────────────────────────────────────
-// 🔁 Recover missed posts
-// ─────────────────────────────────────────────────────────────
-async function recoverMissedPosts() {
-  try {
-    const missed = db
-      .prepare(`
-        SELECT id, stylist_name, salon_id, scheduled_for, status, retry_count
+  // ------------------------------
+  // RECOVERY
+  // ------------------------------
+  async function recoverMissedPosts() {
+    try {
+      const missed = db.prepare(`
+        SELECT id, salon_id, scheduled_for, retry_count
         FROM posts
         WHERE (status='queued' OR status='failed')
           AND scheduled_for IS NOT NULL
           AND strftime('%s', scheduled_for) < strftime('%s','now')
           AND (retry_count IS NULL OR retry_count < 3)
-      `)
-      .all();
+      `).all();
 
-    if (!missed.length) return;
-    console.log(`🔁 [Recovery] ${missed.length} post(s) detected.`);
+      if (!missed.length) return;
 
-    const now = DateTime.utc();
-    for (const post of missed) {
-      const salonPolicy = getSalonPolicy(post.salon_id);
-      const globalPolicy = loadGlobalPolicy();
-      const range =
-        salonPolicy.random_delay_minutes ||
-        salonPolicy.salon_info?.random_delay_minutes ||
-        globalPolicy.random_delay_minutes ||
-        { min: 20, max: 45 };
+      console.log(`🔁 [Recovery] ${missed.length} missed posts`);
 
-      const delay = randomDelay(range.min, range.max);
-      const newTime = now.plus({ minutes: delay }).toISO();
+      const now = DateTime.utc();
 
-      console.log(
-        `🪵 [Recovery] ${post.id} old=${post.scheduled_for} → new=${newTime}`
-      );
+      for (const post of missed) {
+        const policy = getSalonPolicy(post.salon_id);
+        const global = loadGlobalPolicy();
 
-      db.prepare(
-        `
-        UPDATE posts
-        SET scheduled_for=?, status='queued',
-            retry_count=COALESCE(retry_count,0)+1
-        WHERE id=?
-      `
-      ).run(newTime, post.id);
+        const range =
+          policy.random_delay_minutes ||
+          policy.salon_info?.random_delay_minutes ||
+          global.random_delay_minutes ||
+          { min: 20, max: 45 };
 
-      logEvent({
-        event: "scheduler_recovered_post",
-        post_id: post.id,
-        salon_id: post.salon_id,
-        data: { old_time: post.scheduled_for, new_time: newTime },
-      });
+        const newTime = now.plus({ minutes: randomDelay(range.min, range.max) }).toISO();
+
+        db.prepare(`
+          UPDATE posts
+          SET scheduled_for=?, status='queued',
+              retry_count=COALESCE(retry_count,0)+1
+          WHERE id=?
+        `).run(newTime, post.id);
+
+        logEvent({
+          event: "scheduler_recovered_post",
+          salon_id: post.salon_id,
+          post_id: post.id,
+          data: { old: post.scheduled_for, new: newTime },
+        });
+      }
+    } catch (err) {
+      console.error("❌ Recovery error:", err);
     }
-  } catch (err) {
-    console.error("❌ [Recovery] Failed:", err.message);
   }
-}
 
-// ─────────────────────────────────────────────────────────────
-// 🚀 Publish due posts (per-salon batching)
-// ─────────────────────────────────────────────────────────────
-export async function runSchedulerOnce() {
-  try {
+  // ------------------------------
+  // MAIN SCHEDULER LOOP
+  // ------------------------------
+  runSchedulerOnce = async function () {
     const tenants = db
       .prepare(`
-        SELECT DISTINCT COALESCE(salon_id, '__no_salon__') AS sid
+        SELECT DISTINCT salon_id AS sid
         FROM posts
         WHERE status='queued'
           AND scheduled_for IS NOT NULL
           AND strftime('%s', scheduled_for) <= strftime('%s','now')
       `)
       .all()
-      .map((r) => r.sid);
+      .map((x) => x.sid);
 
     if (!tenants.length) {
-      console.log("✅ [Scheduler] No queued posts due right now.");
-      return { ok: true, message: "No queued posts due right now." };
+      console.log("⏳ [Scheduler] Nothing due.");
+      return { ok: true };
     }
 
-    console.log(`⚡ [Scheduler] Tenants with due posts: ${tenants.join(", ")}`);
-    logEvent({ event: "scheduler_run", data: { tenants: tenants.length } });
+    console.log(`⚡ [Scheduler] Tenants due: ${tenants.join(", ")}`);
 
     const nowUtc = DateTime.utc();
 
     for (const salonId of tenants) {
       const due = db
         .prepare(`
-          SELECT * FROM posts
+          SELECT *
+          FROM posts
           WHERE status='queued'
-            AND scheduled_for IS NOT NULL
-            AND strftime('%s', scheduled_for) <= strftime('%s','now')
-            AND COALESCE(salon_id,'__no_salon__') = ?
-          ORDER BY datetime(scheduled_for) ASC
+            AND scheduled_for <= datetime('now')
+            AND salon_id = ?
+          ORDER BY scheduled_for ASC
         `)
         .all(salonId);
 
-      if (!due.length) continue;
-
-      console.log(
-        `🪵 [Scheduler] Processing ${due.length} post(s) for salon_id=${salonId}`
-      );
-
       for (const post of due) {
-        console.log("🪵 [Scheduler] ----------------------------");
-        console.log("🪵 [Scheduler] Inspecting post:", post);
-
-        const salonPolicy = getSalonPolicy(post.salon_id) || {};
-        const globalPolicy = loadGlobalPolicy();
+        const policy = getSalonPolicy(post.salon_id);
+        const global = loadGlobalPolicy();
 
         const window =
-          salonPolicy.posting_window ||
-          salonPolicy.salon_info?.posting_window ||
-          globalPolicy.posting_window ||
-          { start: "09:00", end: "19:00" };
+          policy.posting_window ||
+          policy.salon_info?.posting_window ||
+          global.posting_window;
 
         const tz =
-          salonPolicy.timezone ||
-          salonPolicy.salon_info?.timezone ||
-          (post.city?.includes("Indiana")
-            ? "America/Indiana/Indianapolis"
-            : null) ||
-          globalPolicy.timezone ||
+          policy.timezone ||
+          policy.salon_info?.timezone ||
+          global.timezone ||
           "UTC";
 
         const localNow = nowUtc.setZone(tz);
 
         if (!FORCE_POST_NOW && !withinPostingWindow(localNow, window)) {
-          const retryTime = nowUtc.plus({ hours: 1 }).toISO();
-          db.prepare(
-            `UPDATE posts SET scheduled_for=?, status='queued' WHERE id=?`
-          ).run(retryTime, post.id);
-
-          logEvent({
-            event: "scheduler_delay_outside_window",
-            salon_id: post.salon_id,
-            post_id: post.id,
-            data: { retry_for: retryTime, tz },
-          });
+          const retryAt = nowUtc.plus({ hours: 1 }).toISO();
+          db.prepare(`
+            UPDATE posts SET scheduled_for=?, status='queued' WHERE id=?
+          `).run(retryAt, post.id);
           continue;
         }
 
         try {
-          const image =
-            post.image_url && post.image_url.includes("api.twilio.com")
-              ? await rehostTwilioMedia(post.image_url, post.salon_id)
-              : post.image_url;
+          const image = post.image_url?.includes("twilio")
+            ? await rehostTwilioMedia(post.image_url, post.salon_id)
+            : post.image_url;
 
-          const fbPageId =
-            salonPolicy?.salon_info?.facebook_page_id ||
-            process.env.FACEBOOK_PAGE_ID;
-          const fbToken =
-            salonPolicy?.salon_info?.facebook_page_token || null;
-
-          logEvent({
-            event: "scheduler_attempt_publish",
-            salon_id: post.salon_id,
-            post_id: post.id,
-            data: { fbPageId, image },
-          });
-
+          const cfg = getSalonPolicy(post.salon_id);
           const fbResp = await publishToFacebook(
-            fbPageId,
+            cfg?.salon_info?.facebook_page_id,
             post.final_caption,
             image,
-            fbToken
+            cfg?.salon_info?.facebook_page_token
           );
+
           const igResp = await publishToInstagram({
             salon_id: post.salon_id,
-            imageUrl: image,
             caption: post.final_caption,
+            imageUrl: image,
           });
 
-          db.prepare(
-            `UPDATE posts
-               SET status='published',
-                   fb_post_id=?, ig_media_id=?,
-                   published_at=datetime('now','utc')
-             WHERE id=?`
-          ).run(fbResp?.post_id || null, igResp?.id || null, post.id);
-
-          logEvent({
-            event: "post_published",
-            salon_id: post.salon_id,
-            post_id: post.id,
-            data: {
-              facebook: fbResp || null,
-              instagram: igResp || null,
-              image_used: image,
-              scheduled_for: post.scheduled_for,
-            },
-          });
+          db.prepare(`
+            UPDATE posts
+            SET status='published',
+                fb_post_id=?, ig_media_id=?,
+                published_at=datetime('now','utc')
+            WHERE id=?
+          `).run(fbResp?.post_id, igResp?.id, post.id);
         } catch (err) {
-          const retryTime = nowUtc.plus({ minutes: 30 }).toISO();
-          db.prepare(
-            `UPDATE posts SET status='queued', scheduled_for=? WHERE id=?`
-          ).run(retryTime, post.id);
-
-          logEvent({
-            event: "post_publish_failed",
-            salon_id: post.salon_id,
-            post_id: post.id,
-            data: { error: err.message, retry_for: retryTime },
-          });
+          const retryAt = nowUtc.plus({ minutes: 30 }).toISO();
+          db.prepare(`
+            UPDATE posts SET status='queued', scheduled_for=? WHERE id=?
+          `).run(retryAt, post.id);
         }
       }
     }
 
-    return { ok: true, message: "Scheduler processed due posts per tenant." };
-  } catch (err) {
-    logEvent({ event: "scheduler_error", data: { error: err.message } });
-    return { ok: false, error: err.message };
-  }
+    return { ok: true };
+  };
+
+  // ------------------------------
+  // STARTER — WORKER ONLY
+  // ------------------------------
+  startScheduler = function () {
+    const policy = loadGlobalPolicy();
+
+    log("SCHEDULER_START", {
+      window: policy.posting_window,
+      timezone: policy.timezone,
+    });
+
+    recoverMissedPosts();
+    setInterval(recoverMissedPosts, 15 * 60 * 1000);
+
+    const interval =
+      process.env.TEST_INTERVAL === "1" ? 30000 : 15 * 60 * 1000;
+
+    console.log(`🕓 [Scheduler] Interval = ${interval / 1000}s`);
+    setInterval(runSchedulerOnce, interval);
+  };
 }
-
-// ─────────────────────────────────────────────────────────────
-// ⏱️ Enqueue + loop starter
-// ─────────────────────────────────────────────────────────────
-export function enqueuePost(post) {
-  const policy = loadGlobalPolicy();
-  const delay = randomDelay(
-    policy.random_delay_minutes.min,
-    policy.random_delay_minutes.max
-  );
-  const scheduled = DateTime.utc()
-    .plus({ minutes: delay })
-    .toISO({ suppressMilliseconds: true });
-
-  db.prepare(
-    `
-    UPDATE posts
-    SET status='queued',
-        scheduled_for = ?
-    WHERE id = ?
-  `
-  ).run(scheduled, post.id);
-
-  logEvent({
-    event: "post_enqueued",
-    salon_id: post.salon_id || null,
-    post_id: post.id,
-    data: { scheduled_for: scheduled },
-  });
-
-  return { ...post, scheduled_for: scheduled, status: "queued" };
-}
-
-export function startScheduler() {
-  const policy = loadGlobalPolicy();
-
-  log("SCHEDULER_START", {
-    window: policy.posting_window,
-    timezone: policy.timezone,
-  });
-  logEvent({
-    event: "scheduler_start",
-    data: { window: policy.posting_window, timezone: policy.timezone },
-  });
-
-  recoverMissedPosts();
-  setInterval(recoverMissedPosts, 15 * 60 * 1000);
-
-  const interval =
-    process.env.TEST_INTERVAL === "1" ? 30 * 1000 : 15 * 60 * 1000;
-  console.log(`🕓 [Scheduler] Interval active: every ${interval / 1000}s`);
-  setInterval(runSchedulerOnce, interval);
-}
-
-export { getSalonPolicy };
-
-} // <-- END OF APP_ROLE WORKER MODE WRAPPER
