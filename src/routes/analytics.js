@@ -8,8 +8,9 @@ import { getAllSalons } from "../core/salonLookup.js";
 const router = express.Router();
 
 function appHost() {
-  return process.env.HOST || "http://localhost:3000";
+  return process.env.BASE_URL || "http://localhost:3000";
 }
+
 function navBar(current = "scheduler", salon_id = "") {
   const link = (href, label, key) =>
     `<a href="${href}" class="${

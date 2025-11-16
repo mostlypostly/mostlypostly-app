@@ -16,8 +16,9 @@ function salonNameFromId(salonId) {
   return policy?.salon_info?.salon_name || policy?.salon_info?.name || policy?.name || salonId || "Salon";
 }
 function appHost() {
-  return process.env.HOST || "http://localhost:3000";
+  return process.env.BASE_URL || "http://localhost:3000";
 }
+
 function navBar(current = "database", salon_id = "", manager_phone = "") {
   const link = (href, label, key) =>
     `<a href="${href}" class="${

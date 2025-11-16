@@ -39,7 +39,7 @@ function nowISO() {
 }
 
 function appHost() {
-  return process.env.HOST || "http://localhost:3000";
+  return process.env.BASE_URL || "http://localhost:3000";
 }
 
 function navBar(current = "manager", salon_id = "", manager_phone = "") {

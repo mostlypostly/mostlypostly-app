@@ -748,7 +748,9 @@ export async function handleIncomingMessage({
           const token = await issueManagerToken(salonKey, manager.phone);
           console.log("🔑 Manager token created:", token);
 
-          const managerLink = `${process.env.HOST || "http://localhost:3000"}/manager/login?token=${token}`;
+          const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
+          const managerLink = `${BASE_URL}/manager/login?token=${token}`;
+
           const notifyBody = `✂️ MostlyPostly: New post from ${stylistName}
 
           Review here: ${managerLink}
