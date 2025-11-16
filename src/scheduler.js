@@ -206,24 +206,31 @@ export async function runSchedulerOnce() {
         );
         console.log(`🪵 [${post.id}] FORCE_POST_NOW=${FORCE_POST_NOW}`);
 
-        if (!FORCE_POST_NOW && process.env.SCHEDULER_IGNORE_WINDOW !== "1" && !withinPostingWindow(localNow, window)) {
-          if (process.env.SCHEDULER_IGNORE_WINDOW === "1") {
-            console.log("🟢 [Scheduler] Posting window bypassed (SCHEDULER_IGNORE_WINDOW=1)");
-          }
-          console.log(`⏸️ [${post.id}] Outside posting window, delaying 1h.`);
-          const retryTime = nowUtc.plus({ hours: 1 }).toISO();
-          db.prepare(
-            `UPDATE posts SET scheduled_for=?, status='queued' WHERE id=?`
-          ).run(retryTime, post.id);
+        // If FORCE_POST_NOW=1 or SCHEDULER_IGNORE_WINDOW=1 → always post immediately
+        if (!FORCE_POST_NOW && process.env.SCHEDULER_IGNORE_WINDOW !== "1") {
+          if (!withinPostingWindow(localNow, window)) {
+            console.log(`⏸️ [${post.id}] Outside posting window, delaying 1h.`);
+            const retryTime = nowUtc.plus({ hours: 1 }).toISO();
 
-          logEvent({
-            event: "scheduler_delay_outside_window",
-            salon_id: post.salon_id,
-            post_id: post.id,
-            data: { retry_for: retryTime, tz },
-          });
-          continue;
+            db.prepare(
+              `UPDATE posts SET scheduled_for=?, status='queued' WHERE id=?`
+            ).run(retryTime, post.id);
+
+            logEvent({
+              event: "scheduler_delay_outside_window",
+              salon_id: post.salon_id,
+              post_id: post.id,
+              data: { retry_for: retryTime, tz },
+            });
+
+            continue;
+          }
         }
+
+if (process.env.SCHEDULER_IGNORE_WINDOW === "1") {
+  console.log("🟢 [Scheduler] Posting window bypassed (SCHEDULER_IGNORE_WINDOW=1)");
+}
+
 
         // publish attempt
         try {
