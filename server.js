@@ -73,13 +73,27 @@ import managerRoute from "./src/routes/manager.js";
 import facebookAuthRoutes from "./src/routes/facebookAuth.js";
 
 // =====================================================
-// SCHEDULER — MUST BE LAST
+// SCHEDULER — IMPORTS ONLY (web never starts the loop)
 // =====================================================
 import { enqueuePost, startScheduler, runSchedulerOnce } from "./src/scheduler.js";
 
 // ------------------------------------------------------
-// END OF IMPORT BLOCK — EVERYTHING BELOW REMAINS AS-IS
+// APP_ROLE guard — this file is WEB ONLY
 // ------------------------------------------------------
+const APP_ROLE = process.env.APP_ROLE || "web";
+
+if (APP_ROLE === "worker") {
+  console.log("❌ server.js loaded with APP_ROLE=worker — exiting.");
+  process.exit(1);
+}
+
+console.log(
+  `[Server] APP_ROLE="${APP_ROLE}" — scheduler loop will run only in worker.js, not in server.js.`
+);
+
+// NOTE: Do NOT call startScheduler() in server.js.
+// The background worker (worker.js) is responsible for starting the scheduler loop.
+
 
 
 // ------------------------------------------------------
@@ -147,26 +161,6 @@ app.get("/scheduler/run-now", async (req, res) => {
   const result = await runSchedulerOnce();
   res.json(result);
 });
-
-// ------------------------------------------------------
-// 🗓️ Scheduler bootstrapping
-// ------------------------------------------------------
-startScheduler();
-
-// Scheduler policy (if needed)
-if (!fs.existsSync("./data")) fs.mkdirSync("./data", { recursive: true });
-let schedulerPolicy = {};
-try {
-  schedulerPolicy = JSON.parse(fs.readFileSync("./data/schedulerPolicy.json", "utf8"));
-} catch {
-  schedulerPolicy = {};
-}
-
-// 🔥 Salon watcher
-await loadSalons();
-startSalonWatcher();
-
-console.log("💇 Salons loaded and file watcher active.");
 
 // Environment check
 console.log("🌍 Environment OK — Tokens Loaded:", {

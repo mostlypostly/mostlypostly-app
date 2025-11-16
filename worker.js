@@ -1,6 +1,9 @@
-// worker.js — MostlyPostly Scheduler Worker
-import "./db.js";               // ensure DB & schema are loaded
-import "./src/core/initSchemaHealth.js"; // optional: if you want schema checks here too
-import "./src/scheduler.js";    // will start scheduler ONLY when APP_ROLE=worker
+import { startScheduler } from "./src/scheduler.js";
 
-console.log("🚀 MostlyPostly Scheduler Worker started");
+if (process.env.APP_ROLE !== "worker") {
+    console.log("❌ worker.js launched without APP_ROLE=worker");
+    process.exit(1);
+}
+
+console.log("WORKER MODE: Scheduler active");
+startScheduler();
