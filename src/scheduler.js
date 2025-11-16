@@ -38,7 +38,7 @@ function loadGlobalPolicy() {
     const fallback = {
       posting_window: { start: "09:00", end: "19:00" },
       random_delay_minutes: { min: 20, max: 45 },
-      timezone: "America/Indiana/Indiana polis",
+      timezone: "America/Indiana/Indianapolis",
     };
     console.log("🪵 [GlobalPolicy] Using fallback:", fallback);
     return fallback;
@@ -206,7 +206,10 @@ export async function runSchedulerOnce() {
         );
         console.log(`🪵 [${post.id}] FORCE_POST_NOW=${FORCE_POST_NOW}`);
 
-        if (!FORCE_POST_NOW && !withinPostingWindow(localNow, window)) {
+        if (!FORCE_POST_NOW && process.env.SCHEDULER_IGNORE_WINDOW !== "1" && !withinPostingWindow(localNow, window)) {
+          if (process.env.SCHEDULER_IGNORE_WINDOW === "1") {
+            console.log("🟢 [Scheduler] Posting window bypassed (SCHEDULER_IGNORE_WINDOW=1)");
+          }
           console.log(`⏸️ [${post.id}] Outside posting window, delaying 1h.`);
           const retryTime = nowUtc.plus({ hours: 1 }).toISO();
           db.prepare(

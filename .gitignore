@@ -9,6 +9,9 @@ node_modules/
 logs/
 *.log
 
+# Posts
+data/
+
 # SQLite DB files
 postly.db
 postly*.db*
