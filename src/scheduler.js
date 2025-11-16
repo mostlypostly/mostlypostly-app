@@ -396,7 +396,22 @@ export function startScheduler() {
   });
 
   recoverMissedPosts();
-  setInterval(recoverMissedPosts, 15 * 60 * 1000);
+  // ===============================
+  // Scheduler Polling Interval
+  // ===============================
+  const DEFAULT_INTERVAL = 900; // fallback 15 minutes
+  const intervalSeconds = Number(process.env.SCHEDULER_INTERVAL_SECONDS) || DEFAULT_INTERVAL;
+
+  console.log(`🕓 [Scheduler] Interval active: every ${intervalSeconds}s`);
+
+  setInterval(async () => {
+    try {
+      await processSchedulerTick();
+    } catch (err) {
+      console.error("❌ [Scheduler] Tick error:", err);
+    }
+  }, intervalSeconds * 1000);
+
 
   const interval =
     process.env.TEST_INTERVAL === "1" ? 30 * 1000 : 15 * 60 * 1000;
