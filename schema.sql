@@ -5,6 +5,8 @@
 -- schema.sql — MostlyPostly (v0.8) unified DB schema
 PRAGMA foreign_keys = ON;
 
+BEGIN TRANSACTION;
+
 -- ===== Core reference =====
 CREATE TABLE IF NOT EXISTS salons (
   id                TEXT PRIMARY KEY,              -- uuid
@@ -259,3 +261,5 @@ AFTER UPDATE ON scheduler_queue
 FOR EACH ROW BEGIN
   UPDATE scheduler_queue SET updated_at = datetime('now') WHERE id = NEW.id;
 END;
+
+COMMIT;
