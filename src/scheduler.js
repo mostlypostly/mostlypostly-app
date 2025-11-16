@@ -397,26 +397,21 @@ export function startScheduler() {
 
   recoverMissedPosts();
   // ===============================
-  // Scheduler Polling Interval
+  // Scheduler Polling Interval (ENV based)
   // ===============================
-  const DEFAULT_INTERVAL = 900; // fallback 15 minutes
+  const DEFAULT_INTERVAL = 900; // 15 minutes
   const intervalSeconds = Number(process.env.SCHEDULER_INTERVAL_SECONDS) || DEFAULT_INTERVAL;
 
   console.log(`🕓 [Scheduler] Interval active: every ${intervalSeconds}s`);
 
   setInterval(async () => {
     try {
-      await processSchedulerTick();
+      await runSchedulerOnce(); // <-- your real scheduler tick function
     } catch (err) {
       console.error("❌ [Scheduler] Tick error:", err);
     }
   }, intervalSeconds * 1000);
 
-
-  const interval =
-    process.env.TEST_INTERVAL === "1" ? 30 * 1000 : 15 * 60 * 1000;
-  console.log(`🕓 [Scheduler] Interval active: every ${interval / 1000}s`);
-  setInterval(runSchedulerOnce, interval);
-}
+  }
 
 export { getSalonPolicy };
