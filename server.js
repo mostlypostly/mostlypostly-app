@@ -346,6 +346,9 @@ startScheduler();
 // ------------------------------------------------------
 // 🚀 Start server
 // ------------------------------------------------------
+
+const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
   console.log(`🚀 MostlyPostly ready at ${process.env.BASE_URL || "http://localhost:" + PORT}`);
   console.log(`💡 Health check: http://localhost:${PORT}/healthz`);
