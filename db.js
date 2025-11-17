@@ -32,6 +32,14 @@ export const db = new Database(DB_PATH, {
   verbose: null,
 });
 
+// Ensure posts.updated_at exists BEFORE any imports that touch posts
+try {
+  db.prepare("ALTER TABLE posts ADD COLUMN updated_at TEXT").run();
+  console.log("🧱 (db.js) ensured posts.updated_at exists");
+} catch (e) {
+  // ignore if it already exists
+}
+
 // =====================================================
 // LOAD schema.sql RELIABLY in all environments
 // =====================================================
