@@ -73,7 +73,7 @@ try {
   db.prepare("ALTER TABLE managers ADD COLUMN password_hash TEXT").run();
   console.log("🧱 (db.js) ensured managers.password_hash exists");
 } catch (e) {}
-
+  
 
 // =====================================================
 // Recommended PRAGMAs

@@ -2,29 +2,20 @@
 // Core imports
 // =====================================================
 import fs from "fs";
-import path from "path";
-import express from "express";
 import bodyParser from "body-parser";
 import twilio from "twilio";
-import dotenv from "dotenv";
 import crypto from "crypto";
 import cookieParser from "cookie-parser";
 import fetch from "node-fetch";
 import http from "http";
 import { Server } from "socket.io";
+import express from "express";
+import path from "path";
 import { fileURLToPath } from "url";
-
+import dotenv from "dotenv";
 dotenv.config();
 
-// =====================================================
-// DB FIRST — BEFORE loading anything else
-// =====================================================
-import { db } from "./db.js";
-import { runMigrations } from "./src/core/dbMigrations.js";
-
-// =====================================================
 // Load salons BEFORE routes
-// =====================================================
 import {
   loadSalons,
   startSalonWatcher,
@@ -41,9 +32,6 @@ console.log("💇 Salons loaded and file watcher active.");
 // =====================================================
 import { initSchemaHealth } from "./src/core/initSchemaHealth.js";
 initSchemaHealth();
-
-// 🔧 Run DB migrations AFTER schema.sql has created tables
-runMigrations();
 
 // Load analytics DB triggers
 import "./src/core/analyticsDb.js";
