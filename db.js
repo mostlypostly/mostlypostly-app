@@ -15,7 +15,7 @@ const APP_ENV = process.env.APP_ENV || process.env.NODE_ENV || "local";
 // Default DB path if DB_PATH is not explicitly set
 let defaultDbPath;
 if (APP_ENV === "production") {
-  // On Render (prod), use the persistent disk
+  // On Render (prod/staging), use the persistent disk
   defaultDbPath = "/data/postly.db";
 } else {
   // Local dev / other envs: keep DB in project root
@@ -32,20 +32,12 @@ export const db = new Database(DB_PATH, {
   verbose: null,
 });
 
-// Ensure posts.updated_at exists BEFORE any imports that touch posts
-try {
-  db.prepare("ALTER TABLE posts ADD COLUMN updated_at TEXT").run();
-  console.log("🧱 (db.js) ensured posts.updated_at exists");
-} catch (e) {
-  // ignore if it already exists
-}
-
 // =====================================================
 // LOAD schema.sql RELIABLY in all environments
 // =====================================================
 
 // schema.sql sits in the SAME directory as db.js in Render
-// (because Render unpacks your repo directly into /opt/render/project/src/)
+// (Render unpacks your repo into /opt/render/project/src/)
 const schemaPath = path.join(__dirname, "schema.sql");
 console.log("🔍 Looking for schema.sql at:", schemaPath);
 
@@ -59,6 +51,16 @@ try {
   }
 } catch (e) {
   console.error("❌ Failed applying schema.sql:", e.message);
+}
+
+// =====================================================
+// HOTFIX MIGRATION: ensure posts.updated_at exists
+// =====================================================
+try {
+  db.prepare("ALTER TABLE posts ADD COLUMN updated_at TEXT").run();
+  console.log("🧱 (db.js) ensured posts.updated_at exists");
+} catch (e) {
+  // ignore "no such table" or "duplicate column" errors
 }
 
 // =====================================================
