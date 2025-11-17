@@ -1,9 +1,16 @@
 // src/utils/moderation.js — MostlyPostly v1.1 (tenant-aware moderation)
+import dotenv from "dotenv";
+dotenv.config();
+
 import OpenAI from "openai";
 import { createLogger } from "../utils/logHelper.js";
 import { logEvent, logModeration } from "../core/analyticsDb.js";
 
-const openai = new OpenAI();
+// Ensure we have an API key
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
 const log = createLogger("moderation");
 
 export function sanitizeText(str = "") {

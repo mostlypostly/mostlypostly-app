@@ -1,11 +1,17 @@
-// src/routes/analytics.js — Scheduler Analytics (multi-tenant auto-detect)
+// src/routes/analytics.js — Scheduler Analytics (multi-tenant auto-detect, site-aligned layout)
 import express from "express";
 import { db } from "../../db.js";
 import { DateTime } from "luxon";
 import { getSalonPolicy } from "../scheduler.js";
 import { getAllSalons } from "../core/salonLookup.js";
+import { getSalonName } from "../core/salonLookup.js";
+
 
 const router = express.Router();
+
+// ─────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────
 
 function appHost() {
   return process.env.BASE_URL || "http://localhost:3000";
@@ -18,7 +24,9 @@ function navBar(current = "scheduler", salon_id = "") {
         ? "text-white bg-blue-600"
         : "text-blue-300 hover:text-white hover:bg-blue-500"
     } px-3 py-1 rounded transition">${label}</a>`;
+
   const qsSalon = salon_id ? `?salon=${encodeURIComponent(salon_id)}` : "";
+
   return `
   <header class="bg-black/95 text-blue-300 shadow-md sticky top-0 z-10">
     <div class="max-w-6xl mx-auto flex items-center justify-between px-4 py-3">
@@ -30,66 +38,105 @@ function navBar(current = "scheduler", salon_id = "") {
         ${link("/manager", "Manager", "manager")}
         ${link(`/dashboard${qsSalon}`, "Database", "database")}
         ${link(`/analytics${qsSalon}`, "Scheduler Analytics", "scheduler")}
+        ${link(`/manager/admin${qsSalon}`, "Admin", "admin")}
         ${link(`/index.html`, "Policies", "policies")}
-        ${link("/logout", "Logout", "logout")}
+        ${link("/manager/logout", "Logout", "logout")}
       </nav>
     </div>
   </header>
   <div class="bg-gradient-to-b from-black via-zinc-950 to-black h-[1px]"></div>
   `;
 }
+
+
 function pageShell({ title, body, salon_id = "" }) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
+  <!-- Basic Meta -->
   <meta charset="UTF-8" />
-  <title>${title}</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>${title}</title>
+  <meta name="description" content="MostlyPostly scheduler analytics for salon posts." />
+
+  <!-- TailwindCSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Tailwind config to match marketing site -->
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            mpPrimary: "#6366F1",
+            mpPrimaryDark: "#4F46E5",
+            mpAccent: "#F97316",
+            mpBg: "#020617"
+          }
+        }
+      }
+    };
+  </script>
 </head>
-<body class="bg-black text-zinc-100">
+<body class="bg-slate-950 text-slate-50 antialiased">
   ${navBar("scheduler", salon_id)}
-  <main class="max-w-6xl mx-auto px-4 py-6">
+  <main class="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
     ${body}
   </main>
 </body>
 </html>`;
 }
+
 function salonNameFromId(salonId) {
   const policy = getSalonPolicy(salonId) || {};
-  return policy?.salon_info?.salon_name || policy?.salon_info?.name || policy?.name || salonId || "Salon";
+  return (
+    policy?.salon_info?.salon_name ||
+    policy?.salon_info?.name ||
+    policy?.name ||
+    salonId ||
+    "Salon"
+  );
 }
+
 function formatLocalTime(utcString, salonId) {
   if (!utcString) return "—";
   try {
     const salonPolicy = getSalonPolicy(salonId) || {};
     const tz = salonPolicy?.timezone || "America/Indiana/Indianapolis";
     const parsedISO = DateTime.fromISO(utcString, { zone: "utc" });
-    const dt = parsedISO.isValid ? parsedISO : DateTime.fromSQL(utcString, { zone: "utc" });
+    const dt = parsedISO.isValid
+      ? parsedISO
+      : DateTime.fromSQL(utcString, { zone: "utc" });
     if (!dt.isValid) return utcString;
     return dt.setZone(tz).toFormat("MMM d, yyyy • h:mm a");
   } catch {
     return utcString;
   }
 }
+
 function nextAvailableSlotUtcISO() {
   const row = db
-    .prepare(`
+    .prepare(
+      `
       SELECT scheduled_for
       FROM posts
       WHERE status IN ('approved','queued')
       ORDER BY datetime(scheduled_for) DESC
       LIMIT 1
-    `)
+    `
+    )
     .get();
+
   let dt;
   if (row?.scheduled_for) {
     dt = DateTime.fromISO(row.scheduled_for, { zone: "utc" });
-    if (!dt.isValid) dt = DateTime.fromSQL(row.scheduled_for, { zone: "utc" });
+    if (!dt.isValid) {
+      dt = DateTime.fromSQL(row.scheduled_for, { zone: "utc" });
+    }
   }
   if (!dt || !dt.isValid) dt = DateTime.utc();
   return dt.plus({ minutes: 30 }).toUTC().toISO({ suppressMilliseconds: true });
 }
+
 function resolveSalonId(req) {
   const fromToken = req.manager?.salon_id || req.salon_id || null;
   const fromQuery = req.query.salon || req.query.salon_id || null;
@@ -106,15 +153,26 @@ function resolveSalonId(req) {
 // ─────────────────────────────────────────────────────────────
 // Route
 // ─────────────────────────────────────────────────────────────
+
 router.get("/", (req, res) => {
   const salon_id = resolveSalonId(req);
   if (!salon_id) {
-    return res.status(400).send(
-      pageShell({
-        title: "Missing salon ID",
-        body: `<p class="text-red-400">⚠️ No salon context detected. Access via a manager link (token) or add <code>?salon=&lt;your-salon-id&gt;</code>.</p>`,
-      })
-    );
+    return res
+      .status(400)
+      .send(
+        pageShell({
+          title: "Missing salon ID",
+          salon_id: "",
+          body: `
+          <section class="mt-4 rounded-2xl border border-red-500/40 bg-red-950/40 px-4 py-4">
+            <p class="text-sm text-red-100">
+              ⚠️ No salon context detected. Access via a manager link (token) or add
+              <code class="rounded bg-slate-900 px-1 py-0.5 text-[11px] text-slate-200">?salon=&lt;your-salon-id&gt;</code>.
+            </p>
+          </section>
+        `,
+        })
+      );
   }
 
   const salonName = salonNameFromId(salon_id);
@@ -126,7 +184,9 @@ router.get("/", (req, res) => {
   const counts = {};
   for (const s of ["manager_pending", "approved", "queued", "published", "denied"]) {
     counts[s] = db
-      .prepare(`SELECT COUNT(*) as c FROM posts WHERE salon_id = ? AND status=?`)
+      .prepare(
+        `SELECT COUNT(*) as c FROM posts WHERE salon_id = ? AND status=?`
+      )
       .get(salon_id, s).c;
   }
 
@@ -144,7 +204,9 @@ router.get("/", (req, res) => {
   const tz = salonPolicy?.timezone || "America/Indiana/Indianapolis";
   const nextUtcSlot = nextAvailableSlotUtcISO();
   const parsed = DateTime.fromISO(nextUtcSlot, { zone: "utc" });
-  const nextSlot = parsed.isValid ? parsed.setZone(tz).toFormat("MMM d, yyyy • h:mm a") : "—";
+  const nextSlot = parsed.isValid
+    ? parsed.setZone(tz).toFormat("MMM d, yyyy • h:mm a")
+    : "—";
 
   const cards = Object.entries({
     Total: total,
@@ -156,9 +218,9 @@ router.get("/", (req, res) => {
   })
     .map(
       ([label, val]) => `
-      <div class="p-4 bg-zinc-900 border border-zinc-800 rounded-lg text-center shadow-md">
-        <div class="text-2xl font-bold text-blue-400">${val}</div>
-        <div class="text-sm text-zinc-400">${label}</div>
+      <div class="rounded-2xl border border-slate-800 bg-slate-900/80 p-4 text-center shadow-md shadow-black/40">
+        <div class="text-2xl font-semibold text-mpPrimary">${val}</div>
+        <div class="mt-1 text-xs uppercase tracking-wide text-slate-400">${label}</div>
       </div>`
     )
     .join("\n");
@@ -166,38 +228,85 @@ router.get("/", (req, res) => {
   const recentRows = lastTen
     .map(
       (p) => `
-      <tr class="border-b border-zinc-800 hover:bg-zinc-900/60">
-        <td class="px-3 py-2">${p.stylist_name || "?"}</td>
-        <td class="px-3 py-2 text-sm uppercase text-blue-400">${p.status}</td>
-        <td class="px-3 py-2 text-sm text-zinc-400">${formatLocalTime(p.created, salon_id)}</td>
+      <tr class="border-b border-slate-800/70 hover:bg-slate-900/80">
+        <td class="px-3 py-2 text-sm text-slate-100">${
+          p.stylist_name || "?"
+        }</td>
+        <td class="px-3 py-2 text-xs uppercase tracking-wide text-mpPrimary">${
+          p.status
+        }</td>
+        <td class="px-3 py-2 text-xs text-slate-300">${formatLocalTime(
+          p.created,
+          salon_id
+        )}</td>
       </tr>`
     )
     .join("\n");
 
   const body = `
-    <section class="mb-6">
-      <h1 class="text-2xl font-bold mb-1">Scheduler Analytics — <span class="text-blue-400">${salonName}</span></h1>
-      <p class="text-sm text-zinc-400 mb-6">Overview of post statuses and next scheduling window for this salon.</p>
+    <section class="mb-8">
+      <h1 class="text-2xl font-semibold text-white">
+          Scheduler Analytics — <span class="text-mpPrimary">${getSalonName(salon_id)}</span>
+      </h1>
+      <p class="mt-1 text-sm text-slate-400">
+        Overview of post statuses and the next scheduling window for this salon.
+      </p>
+    </section>
 
-      <div class="mb-4 text-sm bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-3">
-        🕓 <span class="text-blue-400 font-semibold">Next Scheduler Slot:</span>
-        <span class="text-zinc-200">${nextSlot}</span>
+    <section class="mb-6 grid gap-4 md:grid-cols-[1.1fr,0.9fr]">
+      <div class="space-y-4">
+        <div class="rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-4 text-sm text-slate-200">
+          <div class="flex items-center justify-between gap-4">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Next Scheduler Slot</p>
+            <span class="inline-flex items-center rounded-full bg-slate-800 px-3 py-1 text-[11px] text-slate-200">
+              ${tz}
+            </span>
+          </div>
+          <p class="mt-2 text-base font-medium text-white">${nextSlot}</p>
+          <p class="mt-1 text-xs text-slate-400">
+            Based on your salon’s configured posting window.
+          </p>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3 md:grid-cols-3">
+          ${cards}
+        </div>
       </div>
 
-      <div class="grid grid-cols-2 md:grid-cols-6 gap-4 mb-8">${cards}</div>
+      <div class="rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-4">
+        <h2 class="text-sm font-semibold text-white">At a Glance</h2>
+        <p class="mt-2 text-xs text-slate-300">
+          Use this page to quickly check:
+        </p>
+        <ul class="mt-2 space-y-1 text-xs text-slate-200">
+          <li>• How many posts are pending, approved, queued, or published</li>
+          <li>• When the scheduler will run next</li>
+          <li>• Recent posting activity by your team</li>
+        </ul>
+      </div>
+    </section>
 
-      <h2 class="text-xl font-semibold mb-2">Recent Activity</h2>
-      <div class="overflow-x-auto border border-zinc-800 rounded-lg">
-        <table class="w-full text-sm border-collapse">
-          <thead class="bg-zinc-900 text-zinc-300 text-left">
+    <section class="rounded-2xl border border-slate-800 bg-slate-900/80">
+      <div class="border-b border-slate-800 px-4 py-3">
+        <h2 class="text-sm font-semibold text-white">Recent Activity</h2>
+        <p class="mt-1 text-xs text-slate-400">
+          Last 10 posts created for this salon.
+        </p>
+      </div>
+      <div class="overflow-x-auto px-4 py-3">
+        <table class="w-full border-collapse text-sm">
+          <thead class="bg-slate-900/90 text-xs uppercase tracking-wide text-slate-400">
             <tr>
-              <th class="px-3 py-2">Stylist</th>
-              <th class="px-3 py-2">Status</th>
-              <th class="px-3 py-2">Created</th>
+              <th class="px-3 py-2 text-left">Stylist</th>
+              <th class="px-3 py-2 text-left">Status</th>
+              <th class="px-3 py-2 text-left">Created</th>
             </tr>
           </thead>
           <tbody>
-            ${recentRows || "<tr><td colspan=3 class='px-3 py-4 text-center text-zinc-500'>No recent posts.</td></tr>"}
+            ${
+              recentRows ||
+              "<tr><td colspan='3' class='px-3 py-4 text-center text-sm text-slate-400'>No recent posts.</td></tr>"
+            }
           </tbody>
         </table>
       </div>

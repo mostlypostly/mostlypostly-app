@@ -87,48 +87,12 @@ export default function telegramRoute(drafts, lookupStylist, safeGenerateCaption
       const text = (message.caption || message.text || "").trim();
 
               // ✅ Handle consent reply
-if (text.toUpperCase() === "AGREE") {
-  console.log(`🧾 Consent reply detected from ${chatId}`);
+      // ✅ Let the core router handle consent replies
+      if (text.toUpperCase() === "AGREE") {
+        console.log(`🧾 Consent reply detected from ${chatId} (delegating to core router)`);
+        // No early return here – handleIncomingMessage will process consent.
+      }
 
-  const timestamp = new Date().toISOString();
-  const payload = {
-    compliance_opt_in: true,
-    compliance_timestamp: timestamp,
-    consent: { sms_opt_in: true, timestamp }
-  };
-
-  try {
-    const stylist = lookupStylist(chatId);
-    const manager = lookupManager?.(chatId);
-    const profile = stylist || manager;
-    const profileKey = profile?.phone;
-
-    if (!profileKey) {
-      console.warn(`⚠️ Consent attempt from ${chatId} failed — user not found.`);
-      await sendText(
-        chatId,
-        "⚠️ We couldn’t find your profile. Please ask your manager to add you using the JOIN command before agreeing."
-      );
-      return res.sendStatus(200);
-    }
-
-    const result = saveStylistConsent(profileKey, payload);
-    console.log("💾 Consent persistence result:", result);
-
-    await loadSalons(); // refresh cachedSalons so router sees new consent
-
-    await sendText(chatId, "✅ Thanks! You’re now opted-in to MostlyPostly updates.");
-    // ✅ STOP execution here so it doesn't fall through to handleIncomingMessage()
-    return res.sendStatus(200);
-  } catch (err) {
-    console.error("❌ Consent persistence failed:", err);
-    await sendText(
-      chatId,
-      "⚠️ Sorry, something went wrong saving your consent. Please try again."
-    );
-    return res.sendStatus(200);
-  }
-}
 
       const photo = message.photo;
       const fromId = message.from?.id;
@@ -170,21 +134,21 @@ if (text.toUpperCase() === "AGREE") {
       // -----------------------------------------
       const io = req.app.get("io");
 
-      console.time("⏱ handleIncomingMessage");
-      await handleIncomingMessage({
-        source: "telegram",
-        chatId,
-        text,
-        imageUrl: fileUrl,
-        drafts,
-        lookupStylist,
-        safeGenerateCaption,
-        moderateAIOutput,
-        savePost,
-        sendMessage,
-        io
-      });
-      console.timeEnd("⏱ handleIncomingMessage");
+        console.time("⏱ handleIncomingMessage");
+        await handleIncomingMessage({
+          source: "telegram",
+          chatId,
+          text,
+          imageUrl: fileUrl,
+          drafts,
+          // 🔑 This is the important part: pass it as generateCaption
+          generateCaption: safeGenerateCaption,
+          moderateAIOutput,
+          sendMessage,
+          io
+        });
+        console.timeEnd("⏱ handleIncomingMessage");
+
 
       // ✅ Always respond 200 to prevent Telegram retries
       res.sendStatus(200);

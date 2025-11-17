@@ -8,23 +8,9 @@ import { enqueuePost } from "../scheduler.js";
 import { DateTime } from "luxon";
 import { getSalonPolicy } from "../scheduler.js";
 import { rehostTwilioMedia } from "../utils/rehostTwilioMedia.js";
+import { getSalonName, getSalonById } from "../core/salonLookup.js";
 
 const router = express.Router();
-function salonNameFromId(salonId) {
-  const policy = getSalonPolicy(salonId);
-  return policy?.salon_info?.name || policy?.name || salonId;
-}
-
-function getSalonName(salon_id) {
-  const policy = getSalonPolicy(salon_id);
-  return (
-    policy?.salon_info?.name ||
-    policy?.name ||
-    policy?.display_name ||
-    salon_id
-  );
-}
-
 
 // Ensure cookies + body parsing on this sub-app (in case not added globally)
 router.use(cookieParser());
@@ -43,34 +29,43 @@ function appHost() {
 }
 
 function navBar(current = "manager", salon_id = "", manager_phone = "") {
-  const link = (href, label, key) =>
-    `<a href="${href}" class="${
-      current === key
-        ? "text-white bg-blue-600"
-        : "text-blue-300 hover:text-white hover:bg-blue-500"
-    } px-3 py-1 rounded transition">${label}</a>`;
-
   const qsSalon = salon_id ? `?salon=${encodeURIComponent(salon_id)}` : "";
 
+  const link = (href, label, key) =>
+    `<a href="${href}" 
+        class="hover:text-white ${
+          current === key ? "text-white" : "text-slate-300"
+        } transition">
+        ${label}
+     </a>`;
+
   return `
-  <header class="bg-black/95 text-blue-300 shadow-md sticky top-0 z-10">
-    <div class="max-w-6xl mx-auto flex items-center justify-between px-4 py-3">
-      <div class="flex items-center gap-2">
-        <span class="inline-block w-2 h-2 rounded-full bg-blue-500 shadow-[0_0_10px_2px_rgba(59,130,246,0.9)]"></span>
-        <a href="${appHost()}/manager" class="font-semibold tracking-wide">MostlyPostly — Manager</a>
-      </div>
-      <nav class="flex gap-2">
-        ${link("/manager", "Manager", "manager")}
+<header class="border-b border-slate-800/80 bg-slate-950/80 backdrop-blur">
+  <div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+    <div class="flex items-center justify-between py-4">
+      <!-- Logo (match marketing index.html) -->
+      <a href="${appHost()}/manager${qsSalon}" class="flex items-center gap-2" aria-label="MostlyPostly manager home">
+        <div class="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-tr from-mpPrimary to-mpAccent text-xs font-semibold text-white shadow-md shadow-mpPrimary/40">
+          MP
+        </div>
+        <span class="text-lg font-semibold tracking-tight text-white">MostlyPostly</span>
+      </a>
+
+      <!-- Desktop Nav -->
+      <nav class="hidden items-center gap-8 text-sm font-medium text-slate-200 md:flex" aria-label="Primary navigation">
+        ${link(`/manager${qsSalon}`, "Manager", "manager")}
         ${link(`/dashboard${qsSalon}`, "Database", "database")}
         ${link(`/analytics${qsSalon}`, "Scheduler Analytics", "scheduler")}
+        ${link(`/manager/admin${qsSalon}`, "Admin", "admin")}
         ${link(`/index.html`, "Policies", "policies")}
         ${link("/manager/logout", "Logout", "logout")}
       </nav>
     </div>
-  </header>
-  <div class="bg-gradient-to-b from-black via-zinc-950 to-black h-[1px]"></div>
-  `;
+  </div>
+</header>
+`;
 }
+
 
 function pageShell({ title, body, salon_id = "", manager_phone = "", current = "manager" }) {
   return `<!DOCTYPE html>
@@ -79,11 +74,27 @@ function pageShell({ title, body, salon_id = "", manager_phone = "", current = "
   <meta charset="UTF-8" />
   <title>${title}</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <!-- Tailwind CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Brand Tailwind config (same as marketing index.html) -->
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            mpPrimary: "#6366F1",
+            mpPrimaryDark: "#4F46E5",
+            mpAccent: "#F97316",
+            mpBg: "#020617"
+          }
+        }
+      }
+    };
+  </script>
 </head>
-<body class="bg-black text-zinc-100">
+<body class="bg-slate-950 text-slate-50 antialiased">
   ${navBar(current, salon_id, manager_phone)}
-  <main class="max-w-6xl mx-auto px-4 py-6">
+  <main class="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
     ${body}
   </main>
     <script>
@@ -379,62 +390,100 @@ router.get("/", requireAuth, async (req, res) => {
         .replace(/\n/g, "<br/>");
 
       if (pendingMode) {
-        // FULL CARD for pending
-        return `
-        <article class="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-md">
-          <div class="grid grid-cols-1 md:grid-cols-3">
-            <div class="aspect-square bg-black/60">
-              <img src="${img}" class="w-full h-full object-cover" alt="post"/>
+      // FULL CARD for pending
+      return `
+        <article class="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-md w-full">
+          <div class="grid grid-cols-[140px_1fr] gap-6 p-6 items-start">
+
+            <!-- LEFT: IMAGE -->
+            <div class="flex">
+              <img src="${img}" 
+                  <img src="${img}"
+                    class="w-[180px] h-[180px] md:w-[220px] md:h-[220px] object-cover rounded-lg shadow-lg" />
             </div>
-            <div class="md:col-span-2 p-4">
-              <h3 class="text-lg font-semibold text-blue-400">Post #${post.salon_post_number || post.salonPostNumber || post["salon_post_number"] || "—"}</h3>
-              <p class="text-sm text-zinc-400 mb-2">Created ${fmtLocal(post.created_at)}</p>
-              <div class="prose prose-invert mb-3">${safeCap}</div>
-              <div class="flex flex-col md:flex-row gap-3">
-                <form method="POST" action="/manager/approve">
-                  <input type="hidden" name="post_id" value="${post.id}"/>
-                  <input type="hidden" name="action" value="schedule"/>
-                  <button class="px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white">Approve (schedule)</button>
-                </form>
-                <form method="POST" action="/manager/approve">
-                  <input type="hidden" name="post_id" value="${post.id}"/>
-                  <input type="hidden" name="action" value="post_now"/>
-                  <button class="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white">Post now</button>
-                </form>
-                <form action="/manager/deny" method="POST" class="deny-form max-w-md">
-                  <input type="hidden" name="post_id" value="${post.id}"/>
-                  <textarea name="reason" placeholder="Reason for denial..." class="block w-full mt-2 text-sm p-2 rounded bg-zinc-800 border border-zinc-700 text-zinc-200"></textarea>
-                  <button type="submit" class="mt-2 px-3 py-1 rounded bg-red-600 hover:bg-red-500 text-white">Deny</button>
+
+            <!-- RIGHT: DETAILS -->
+            <div>
+              <h3 class="font-semibold text-white text-lg mb-1">Post #${post.salon_post_number ?? 1}</h3>
+              <p class="text-xs text-slate-400 mb-4">
+                Created ${post.created_at_formatted}
+              </p>
+
+              <div class="prose prose-invert text-sm mb-4">
+                ${post.final_caption.replace(/\n/g, "<br/>")}
+              </div>
+
+              <!-- BUTTONS -->
+              <div class="flex flex-wrap gap-3 mt-4">
+                <a href="/manager/approve?id=${post.id}"
+                  class="rounded-full bg-blue-600 hover:bg-blue-700 px-4 py-1.5 text-xs font-semibold text-white">
+                  Approve (schedule)
+                </a>
+
+                <a href="/manager/post-now?id=${post.id}"
+                  class="rounded-full bg-green-600 hover:bg-green-700 px-4 py-1.5 text-xs font-semibold text-white">
+                  Post now
+                </a>
+
+                <form method="POST" action="/manager/deny?id=${post.id}">
+                  <div class="flex items-center gap-2">
+                    <input name="reason" placeholder="Reason for denial…" 
+                          class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-white placeholder:text-zinc-400 w-48"/>
+                    <button class="bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-full px-4 py-1.5">
+                      Deny
+                    </button>
+                  </div>
                 </form>
               </div>
             </div>
+
           </div>
-        </article>`;
+        </article>
+      `;
       }
 
       // CONDENSED CARD for recent (with Edit toggle)
       const isEditable = !["published", "denied"].includes(post.status);
       return `
-      <details class="bg-zinc-900/60 border border-zinc-800 rounded-xl">
-        <summary class="cursor-pointer px-4 py-3 flex justify-between items-center">
-          <div>
-            <span class="text-blue-400 font-semibold">#${post.salon_post_number || "—"} — ${post.stylist_name || "Unknown Stylist"}</span>
-            <span class="text-zinc-400 text-sm ml-2">${post.status.toUpperCase()}</span>
-          </div>
-          <span class="text-xs text-zinc-500">${fmtLocal(post.scheduled_for) || "—"}</span>
-        </summary>
-        <div class="p-4 border-t border-zinc-800">
-          <img src="${img}" class="w-full max-h-64 object-cover rounded mb-3"/>
-          <div class="prose prose-invert text-sm mb-3">${safeCap}</div>
-          ${
-            isEditable
-              ? `<div class="flex gap-2">
-                  <button type="button" class="edit-toggle px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm">Edit</button>
+        <details class="bg-zinc-900/60 border border-zinc-800 rounded-xl w-full">
+          <summary class="cursor-pointer px-4 py-3 flex justify-between items-center">
+            <div>
+              <span class="text-blue-400 font-semibold">#${post.salon_post_number || "—"} — ${
+        post.stylist_name || "Unknown Stylist"
+      }</span>
+              <span class="text-zinc-400 text-sm ml-2">${post.status.toUpperCase()}</span>
+            </div>
+            <span class="text-xs text-zinc-500">${fmtLocal(post.scheduled_for) || "—"}</span>
+          </summary>
+
+          <div class="border-t border-zinc-800">
+            <div class="grid grid-cols-[140px_1fr] gap-6 p-6 items-start">
+              
+              <!-- LEFT: IMAGE -->
+              <div class="flex">
+                <img src="${img}" 
+                  class="w-[180px] h-[180px] md:w-[220px] md:h-[220px] object-cover rounded-lg shadow-lg" />
+              </div>
+
+              <!-- RIGHT: DETAILS + EDIT CONTROLS -->
+              <div>
+                <div class="prose prose-invert text-sm mb-3">${safeCap}</div>
+
+                ${
+                  isEditable
+                    ? `
+                <div class="flex gap-2 mb-3">
+                  <button type="button" class="edit-toggle px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm">
+                    Edit
+                  </button>
                   <form method="POST" action="/manager/cancel">
                     <input type="hidden" name="post_id" value="${post.id}"/>
-                    <button class="px-3 py-1 rounded bg-red-600 hover:bg-red-500 text-white text-sm">Cancel</button>
+                    <button class="px-3 py-1 rounded bg-red-600 hover:bg-red-500 text-white text-sm">
+                      Cancel
+                    </button>
                   </form>
                 </div>
+
                 <div id="edit-fields-${post.id}" class="hidden mt-3 space-y-2">
                   <form method="POST" action="/manager/edit" class="space-y-2">
                     <input type="hidden" name="post_id" value="${post.id}"/>
@@ -448,49 +497,48 @@ router.get("/", requireAuth, async (req, res) => {
                     </div>
                   </form>
                 </div>`
-              : `<p class="text-xs text-zinc-500 italic">Locked (already published or denied)</p>`
-          }
-        </div>
-      </details>`;
+                    : `<p class="text-xs text-zinc-500 italic">Locked (already published or denied)</p>`
+                }
+              </div>
 
+            </div>
+          </div>
+        </details>`;
     }
 
     const pendingCards = await Promise.all(pending.map((row) => card(row, true)));
     const recentCards = await Promise.all(recent.map((row) => card(row, false)));
 
-    const body = `
-      <section class="mb-6">
-        <h1 class="text-2xl font-bold mb-4">
-          Manager Dashboard — <span class="text-blue-400">${getSalonName(salon_id)}</span>
-        </h1>
+            const body = `
+      <section class="mb-8">
+        <div class="flex flex-col gap-2">
+          <h1 class="text-3xl font-semibold text-white">
+            Manager Dashboard — <span class="text-mpPrimary">${getSalonName(salon_id)}</span>
+          </h1>
+          <p class="text-sm text-slate-400">
+            Logged in as ${req.manager.manager_name || req.manager.name || "Manager"} (${req.manager.manager_phone || "unknown"}).
+          </p>
+          <p class="text-xs text-slate-500">
+            Use the navigation above to open Database, Scheduler Analytics, or Admin settings.
+          </p>
+        </div>
+      </section>
 
-        <p class="text-sm text-gray-500 mb-3">
-          Logged in as ${req.manager.manager_name || req.manager.name || "Manager"} (${req.manager.manager_phone || "unknown"})
-        </p>
+      <section class="space-y-4 mb-10">
+        <h2 class="text-xl font-semibold text-white">Pending Approval</h2>
+        ${
+          pendingCards.length
+            ? `<div class="flex flex-col gap-6">${pendingCards.join("")}</div>`
+            : `<div class="bg-zinc-900/60 border border-zinc-800 rounded-xl p-6 text-zinc-300">No pending posts.</div>`
+        }
 
-        <!-- 🔵 Connect Facebook / Refresh Token button -->
-        <a
-          href="/auth/facebook/login?salon=${encodeURIComponent(salon_id)}"
-          class="inline-flex items-center px-3 py-2 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700"
-        >
-          Connect / Refresh Facebook
-        </a>
       </section>
 
       <section class="space-y-4">
-        <h2 class="text-xl font-semibold text-white/90">Pending Approval</h2>
-        ${
-          pendingCards.length
-            ? `<div class="grid gap-4">${pendingCards.join("")}</div>`
-            : `<div class="bg-zinc-900/60 border border-zinc-800 rounded-xl p-6 text-zinc-300">No pending posts.</div>`
-        }
-      </section>
-
-      <section class="space-y-4 mt-10">
-        <h2 class="text-xl font-semibold text-white/90">Recent (Approved / Queued / Published / Failed / Denied)</h2>
+        <h2 class="text-xl font-semibold text-white">Recent (Approved / Queued / Published / Failed / Denied)</h2>
         ${
           recentCards.length
-            ? `<div class="grid gap-3">${recentCards.join("")}</div>`
+            ? `<div class="flex flex-col gap-4">${recentCards.join("")}</div>`
             : `<div class="bg-zinc-900/60 border border-zinc-800 rounded-xl p-6 text-zinc-300">No recent posts yet.</div>`
         }
       </section>
@@ -693,6 +741,276 @@ router.post("/cancel", requireAuth, async (req, res) => {
     console.error("❌ /manager/cancel error:", err);
     return res.redirect("/manager?err=server");
   }
+});
+
+// ───────────────────────────────────────────────────────────
+// Admin page — salon configuration & social connections
+// ───────────────────────────────────────────────────────────
+router.get("/admin", requireAuth, (req, res) => {
+    const salon_id = req.manager?.salon_id || "unknown";
+  const manager_phone = req.manager?.manager_phone || "";
+
+  // Use the full salon config from salons/<id>.json
+  const salon = getSalonById(salon_id) || {};
+  const info = salon.salon_info || {};
+  const settings = salon.settings || {};
+  const managers = salon.managers || [];
+  const stylists = salon.stylists || [];
+  const compliance = info.compliance || {};
+  const postingWindow = settings.posting_window || {};
+  const randomDelay = settings.random_delay_minutes || {};
+
+  const bookingUrl = info.booking_url || "";
+  const timezone = info.timezone || "America/Indiana/Indianapolis";
+
+  // Managers table
+  const managersRows = managers
+    .map((m) => {
+      const spec = (m.specialties || []).join(", ");
+      const ig = m.instagram_handle || "—";
+      const sms = m.consent?.sms_opt_in ? "Yes" : "No";
+      return `
+        <tr class="border-b border-zinc-800/80">
+          <td class="px-3 py-2 text-sm text-zinc-100">${m.name || "—"}</td>
+          <td class="px-3 py-2 text-xs text-zinc-300">${m.phone || "—"}</td>
+          <td class="px-3 py-2 text-xs text-zinc-300">${ig}</td>
+          <td class="px-3 py-2 text-xs text-zinc-300">${spec || "—"}</td>
+          <td class="px-3 py-2 text-xs text-zinc-300">${sms}</td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  // Stylists table
+  const stylistsRows = stylists
+    .map((s) => {
+      const spec = (s.specialties || []).join(", ");
+      const ig = s.instagram_handle || "—";
+      const sms = s.consent?.sms_opt_in ? "Yes" : "No";
+      return `
+        <tr class="border-b border-zinc-800/80">
+          <td class="px-3 py-2 text-sm text-zinc-100">${s.name || "—"}</td>
+          <td class="px-3 py-2 text-xs text-zinc-300">${s.phone || "—"}</td>
+          <td class="px-3 py-2 text-xs text-zinc-300">${ig}</td>
+          <td class="px-3 py-2 text-xs text-zinc-300">${spec || "—"}</td>
+          <td class="px-3 py-2 text-xs text-zinc-300">${sms}</td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  const fbPageId = info.facebook_page_id || "Not configured";
+  const igBizId = info.instagram_business_id || "Not configured";
+  const igHandle = info.instagram_handle || "Not configured";
+  const xHandle = info.x_handle || "Not configured";
+  const tiktokHandle = info.tiktok_handle || "Not configured";
+
+  const body = `
+    <section class="mb-6">
+      <h1 class="text-2xl font-bold mb-2">
+        Admin — <span class="text-blue-400">${getSalonName(salon_id)}</span>
+      </h1>
+      <p class="text-sm text-zinc-400">
+        Manage social connections, posting rules, and stylist configuration for this salon.
+      </p>
+    </section>
+
+    <!-- Social Connections -->
+    <section class="mb-6 grid gap-4 md:grid-cols-[1.2fr,0.8fr]">
+      <div class="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4">
+        <h2 class="text-sm font-semibold text-zinc-50 mb-2">Social Connections</h2>
+        <dl class="space-y-1 text-xs text-zinc-300">
+          <div class="flex justify-between gap-3">
+            <dt class="text-zinc-400">Facebook Page ID</dt>
+            <dd class="font-mono text-[11px]">${fbPageId}</dd>
+          </div>
+          <div class="flex justify-between gap-3">
+            <dt class="text-zinc-400">Instagram Business ID</dt>
+            <dd class="font-mono text-[11px]">${igBizId}</dd>
+          </div>
+          <div class="flex justify-between gap-3">
+            <dt class="text-zinc-400">Instagram Handle</dt>
+            <dd class="font-mono text-[11px]">@${igHandle}</dd>
+          </div>
+          <div class="flex justify-between gap-3">
+            <dt class="text-zinc-400">X (Twitter)</dt>
+            <dd class="font-mono text-[11px]">@${xHandle}</dd>
+          </div>
+          <div class="flex justify-between gap-3">
+            <dt class="text-zinc-400">TikTok</dt>
+            <dd class="font-mono text-[11px]">@${tiktokHandle}</dd>
+          </div>
+        </dl>
+
+        <div class="mt-4">
+          <a
+            href="/auth/facebook/login?salon=${encodeURIComponent(salon_id)}"
+            class="inline-flex items-center px-3 py-2 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700"
+          >
+            Connect / Refresh Facebook & Instagram
+          </a>
+          <p class="mt-2 text-[11px] text-zinc-500">
+            Uses your MostlyPostly Facebook App to grant or refresh Page & Instagram permissions.
+          </p>
+        </div>
+      </div>
+
+      <div class="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4">
+        <h2 class="text-sm font-semibold text-zinc-50 mb-2">Salon Info</h2>
+        <dl class="space-y-1 text-xs text-zinc-300">
+          <div class="flex justify-between gap-3">
+            <dt class="text-zinc-400">Name</dt>
+            <dd>${info.name || "—"}</dd>
+          </div>
+          <div class="flex justify-between gap-3">
+            <dt class="text-zinc-400">City</dt>
+            <dd>${info.city || "—"}</dd>
+          </div>
+          <div class="flex justify-between gap-3">
+            <dt class="text-zinc-400">Timezone</dt>
+            <dd>${timezone}</dd>
+          </div>
+          <div class="flex justify-between gap-3">
+            <dt class="text-zinc-400">Booking URL</dt>
+            <dd class="truncate max-w-[12rem]">
+              ${
+                bookingUrl
+                  ? `<a href="${bookingUrl}" target="_blank" class="underline text-blue-400">Open booking page</a>`
+                  : "Not set"
+              }
+            </dd>
+          </div>
+          <div class="flex justify-between gap-3">
+            <dt class="text-zinc-400">Tone Profile</dt>
+            <dd>${info.tone_profile || "default"}</dd>
+          </div>
+          <div class="flex justify-between gap-3">
+            <dt class="text-zinc-400">Auto Publish</dt>
+            <dd>${info.auto_publish ? "Enabled" : "Disabled"}</dd>
+          </div>
+          <div class="flex justify-between gap-3">
+            <dt class="text-zinc-400">Stylist SMS Consent Required</dt>
+            <dd>${compliance.stylist_sms_consent_required ? "Yes" : "No"}</dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+
+    <!-- Posting Rules -->
+    <section class="mb-6 grid gap-4 md:grid-cols-2">
+      <div class="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4">
+        <h2 class="text-sm font-semibold text-zinc-50 mb-2">Posting Window</h2>
+        <p class="text-xs text-zinc-300">
+          MostlyPostly only posts inside your configured window (salon local time).
+        </p>
+        <dl class="mt-3 space-y-1 text-xs text-zinc-300">
+          <div class="flex justify-between gap-3">
+            <dt class="text-zinc-400">Start</dt>
+            <dd>${postingWindow.start || "00:00"}</dd>
+          </div>
+          <div class="flex justify-between gap-3">
+            <dt class="text-zinc-400">End</dt>
+            <dd>${postingWindow.end || "23:59"}</dd>
+          </div>
+        </dl>
+      </div>
+
+      <div class="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4">
+        <h2 class="text-sm font-semibold text-zinc-50 mb-2">Manager Rules</h2>
+        <dl class="space-y-1 text-xs text-zinc-300">
+          <div class="flex justify-between gap-3">
+            <dt class="text-zinc-400">Require Manager Approval</dt>
+            <dd>${settings.require_manager_approval ? "Yes" : "No"}</dd>
+          </div>
+          <div class="flex justify-between gap-3">
+            <dt class="text-zinc-400">Auto-post if no response</dt>
+            <dd>${
+              settings.auto_post_if_no_response_hours != null
+                ? settings.auto_post_if_no_response_hours + " hours"
+                : "Disabled"
+            }</dd>
+          </div>
+          <div class="flex justify-between gap-3">
+            <dt class="text-zinc-400">Random Delay</dt>
+            <dd>
+              ${
+                randomDelay.min != null && randomDelay.max != null
+                  ? `${randomDelay.min}–${randomDelay.max} min`
+                  : "Not configured"
+              }
+            </dd>
+          </div>
+          <div class="flex justify-between gap-3">
+            <dt class="text-zinc-400">Notify stylist on approval</dt>
+            <dd>${settings.notify_stylist_on_approval ? "Yes" : "No"}</dd>
+          </div>
+          <div class="flex justify-between gap-3">
+            <dt class="text-zinc-400">Notify stylist on denial</dt>
+            <dd>${settings.notify_stylist_on_denial ? "Yes" : "No"}</dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+
+    <!-- Managers & Stylists -->
+    <section class="mb-6 grid gap-4 md:grid-cols-2">
+      <div class="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4">
+        <h2 class="text-sm font-semibold text-zinc-50 mb-3">Managers</h2>
+        <div class="overflow-x-auto">
+          <table class="w-full border-collapse text-xs">
+            <thead class="bg-zinc-950/80 text-zinc-400">
+              <tr>
+                <th class="px-3 py-2 text-left">Name</th>
+                <th class="px-3 py-2 text-left">Phone</th>
+                <th class="px-3 py-2 text-left">IG Handle</th>
+                <th class="px-3 py-2 text-left">Specialties</th>
+                <th class="px-3 py-2 text-left">SMS Opt-in</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${
+                managersRows ||
+                `<tr><td colspan="5" class="px-3 py-3 text-center text-zinc-500 text-xs">No managers configured in salon file.</td></tr>`
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4">
+        <h2 class="text-sm font-semibold text-zinc-50 mb-3">Stylists</h2>
+        <div class="overflow-x-auto">
+          <table class="w-full border-collapse text-xs">
+            <thead class="bg-zinc-950/80 text-zinc-400">
+              <tr>
+                <th class="px-3 py-2 text-left">Name</th>
+                <th class="px-3 py-2 text-left">Phone</th>
+                <th class="px-3 py-2 text-left">IG Handle</th>
+                <th class="px-3 py-2 text-left">Specialties</th>
+                <th class="px-3 py-2 text-left">SMS Opt-in</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${
+                stylistsRows ||
+                `<tr><td colspan="5" class="px-3 py-3 text-center text-zinc-500 text-xs">No stylists configured in salon file.</td></tr>`
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  `;
+
+  res.send(
+    pageShell({
+      title: `Admin — ${info.name || salon_id}`,
+      body,
+      salon_id,
+      manager_phone,
+      current: "admin",
+    })
+  );
 });
 
 export default router;

@@ -23,6 +23,15 @@ CREATE TABLE IF NOT EXISTS salons (
   updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS stylist_portal_tokens (
+  id TEXT PRIMARY KEY,
+  post_id TEXT NOT NULL,
+  stylist_phone TEXT,
+  token TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS managers (
   id           TEXT PRIMARY KEY,
   salon_id     TEXT NOT NULL REFERENCES salons(slug) ON DELETE CASCADE,
@@ -32,7 +41,7 @@ CREATE TABLE IF NOT EXISTS managers (
   role         TEXT DEFAULT 'manager',
   pin          TEXT,
   created_at   TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
 );
 
 CREATE TABLE IF NOT EXISTS stylists (

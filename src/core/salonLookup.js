@@ -20,6 +20,33 @@ export function getSalonById(salonId) {
   ) || null;
 }
 
+// Return a human-friendly salon name for a given salonId or salon object
+export function getSalonName(salonOrId) {
+  if (!salonOrId) return "Salon";
+
+  // Support both a salon object and a plain ID
+  const salon =
+    typeof salonOrId === "object" && salonOrId.salon_info
+      ? salonOrId
+      : getSalonById(salonOrId);
+
+  if (!salon) {
+    // fall back to whatever ID we were given
+    return String(salonOrId);
+  }
+
+  const info = salon.salon_info || {};
+
+  // Prefer explicit name fields, then fall back to ID
+  return (
+    info.name ||
+    info.salon_name ||
+    salon.salon_name ||
+    salon.salon_id ||
+    String(salonOrId)
+  );
+}
+
 function resolveSalonsDir() {
   const candidates = [];
   if (process.env.SALONS_DIR) candidates.push(path.resolve(process.env.SALONS_DIR));
