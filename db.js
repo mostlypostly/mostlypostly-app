@@ -33,11 +33,8 @@ export const db = new Database(DB_PATH, {
 });
 
 // =====================================================
-// LOAD schema.sql RELIABLY in all environments
+// 1) Apply schema.sql so base tables exist
 // =====================================================
-
-// schema.sql sits in the SAME directory as db.js in Render
-// (Render unpacks your repo into /opt/render/project/src/)
 const schemaPath = path.join(__dirname, "schema.sql");
 console.log("🔍 Looking for schema.sql at:", schemaPath);
 
@@ -54,29 +51,36 @@ try {
 }
 
 // =====================================================
-// HOTFIX MIGRATION: ensure posts.updated_at exists
+// 2) Hotfix migrations – run AFTER schema.sql
+//    (safe + idempotent, ignore duplicate-column errors)
 // =====================================================
+
+// posts.updated_at
 try {
-  db.prepare("ALTER TABLE posts ADD COLUMN updated_at TEXT").run();
+  db.prepare('ALTER TABLE posts ADD COLUMN updated_at TEXT').run();
   console.log("🧱 (db.js) ensured posts.updated_at exists");
 } catch (e) {
-  // ignore "no such table" or "duplicate column" errors
+  // ignore if table/column already exists
 }
-// Ensure managers.email exists
-try {
-  db.prepare("ALTER TABLE managers ADD COLUMN email TEXT UNIQUE").run();
-  console.log("🧱 (db.js) ensured managers.email exists");
-} catch (e) {}
 
-// Ensure managers.password_hash exists
+// managers.email
 try {
-  db.prepare("ALTER TABLE managers ADD COLUMN password_hash TEXT").run();
+  db.prepare('ALTER TABLE managers ADD COLUMN email TEXT UNIQUE').run();
+  console.log("🧱 (db.js) ensured managers.email exists");
+} catch (e) {
+  // ignore if table/column already exists
+}
+
+// managers.password_hash
+try {
+  db.prepare('ALTER TABLE managers ADD COLUMN password_hash TEXT').run();
   console.log("🧱 (db.js) ensured managers.password_hash exists");
-} catch (e) {}
-  
+} catch (e) {
+  // ignore if table/column already exists
+}
 
 // =====================================================
-// Recommended PRAGMAs
+// 3) Recommended PRAGMAs
 // =====================================================
 try {
   db.pragma("journal_mode = WAL");
@@ -86,7 +90,7 @@ try {
 }
 
 // =====================================================
-// Minimal legacy bootstrap
+// 4) Minimal legacy bootstrap – manager_tokens
 // =====================================================
 try {
   db.prepare(`
@@ -102,7 +106,7 @@ try {
 }
 
 // =====================================================
-// Helper: verify token 
+// Helper: verify token
 // =====================================================
 export function verifyTokenRow(token) {
   try {
