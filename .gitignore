@@ -10,7 +10,10 @@ logs/
 *.log
 
 # Posts
-data/
+data/posts.json
+
+# Local configs
+.zshrc
 
 # SQLite DB files
 postly.db
