@@ -62,6 +62,18 @@ try {
 } catch (e) {
   // ignore "no such table" or "duplicate column" errors
 }
+// Ensure managers.email exists
+try {
+  db.prepare("ALTER TABLE managers ADD COLUMN email TEXT UNIQUE").run();
+  console.log("🧱 (db.js) ensured managers.email exists");
+} catch (e) {}
+
+// Ensure managers.password_hash exists
+try {
+  db.prepare("ALTER TABLE managers ADD COLUMN password_hash TEXT").run();
+  console.log("🧱 (db.js) ensured managers.password_hash exists");
+} catch (e) {}
+
 
 // =====================================================
 // Recommended PRAGMAs
