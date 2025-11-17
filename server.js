@@ -20,7 +20,7 @@ dotenv.config();
 // DB FIRST — BEFORE loading anything else
 // =====================================================
 import { db } from "./db.js";
-runMigrations();
+import { runMigrations } from "./src/core/dbMigrations.js";
 
 // =====================================================
 // Load salons BEFORE routes
@@ -41,6 +41,9 @@ console.log("💇 Salons loaded and file watcher active.");
 // =====================================================
 import { initSchemaHealth } from "./src/core/initSchemaHealth.js";
 initSchemaHealth();
+
+// 🔧 Run DB migrations AFTER schema.sql has created tables
+runMigrations();
 
 // Load analytics DB triggers
 import "./src/core/analyticsDb.js";
