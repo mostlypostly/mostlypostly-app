@@ -14,22 +14,12 @@ CREATE TABLE IF NOT EXISTS salons (
   phone             TEXT,
   city              TEXT,
   timezone          TEXT NOT NULL DEFAULT 'America/Indiana/Indianapolis',
-  booking_url       TEXT,
-  facebook_page_id  TEXT,
-  instagram_biz_id  TEXT,
   default_hashtags  TEXT,
-  policy            TEXT,
+  booking_url       TEXT,
+  tone              TEXT,
+  auto_publish      INTEGER NOT NULL DEFAULT 0,
   created_at        TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS stylist_portal_tokens (
-  id TEXT PRIMARY KEY,
-  post_id TEXT NOT NULL,
-  stylist_phone TEXT,
-  token TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
-  used_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS managers (
@@ -41,7 +31,7 @@ CREATE TABLE IF NOT EXISTS managers (
   role         TEXT DEFAULT 'manager',
   pin          TEXT,
   created_at   TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS stylists (
@@ -49,9 +39,11 @@ CREATE TABLE IF NOT EXISTS stylists (
   salon_id         TEXT NOT NULL REFERENCES salons(slug) ON DELETE CASCADE,
   name             TEXT,
   phone            TEXT UNIQUE,
+  chat_id          TEXT,
   instagram_handle TEXT,
-  role             TEXT DEFAULT 'stylist',
-  active           INTEGER NOT NULL DEFAULT 1,
+  specialties      TEXT,
+  is_active        INTEGER NOT NULL DEFAULT 1,
+  consent_sms      INTEGER NOT NULL DEFAULT 0,
   created_at       TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -103,28 +95,7 @@ CREATE TABLE IF NOT EXISTS posts (
   salon_post_number  INTEGER,
 
   _meta              TEXT,
-  created_at         TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at         TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_posts_salon_created   ON posts(salon_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_posts_status_sched    ON posts(status, published_at);
-
-CREATE TRIGGER IF NOT EXISTS trg_posts_updated_at
-AFTER UPDATE ON posts
-FOR EACH ROW BEGIN
-  UPDATE posts SET updated_at = datetime('now') WHERE id = NEW.id;
-END;
-
--- ===== Approvals =====
-CREATE TABLE IF NOT EXISTS approvals (
-  id           TEXT PRIMARY KEY,
-  post_id      TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-  approver_id  TEXT REFERENCES managers(id) ON DELETE SET NULL,
-  action       TEXT NOT NULL,
-  reason       TEXT,
-  snapshot     TEXT,
-  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at         TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- ===== Scheduler =====
@@ -148,39 +119,40 @@ CREATE INDEX IF NOT EXISTS idx_posts_scheduled_for ON scheduler_queue(status, sc
 CREATE TABLE IF NOT EXISTS moderation_flags (
   id          TEXT PRIMARY KEY,
   salon_id    TEXT REFERENCES salons(slug) ON DELETE CASCADE,
-  post_id     TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-  level       TEXT,
+  post_id     TEXT REFERENCES posts(id) ON DELETE CASCADE,
+  level       TEXT NOT NULL,
   reasons     TEXT,
-  status      TEXT DEFAULT 'open',
-  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-  resolved_at TEXT
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- ===== Tokens & Credentials =====
-CREATE TABLE IF NOT EXISTS tokens (
-  id            TEXT PRIMARY KEY,
-  salon_id      TEXT NOT NULL REFERENCES salons(slug) ON DELETE CASCADE,
-  provider      TEXT NOT NULL,
-  access_token  TEXT,
-  refresh_token TEXT,
-  expires_at    TEXT,
-  extra         TEXT,
-  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE (salon_id, provider)
-);
-
--- ===== Sessions =====
-CREATE TABLE IF NOT EXISTS sessions (
+-- ===== Analytics =====
+CREATE TABLE IF NOT EXISTS analytics_events (
   id          TEXT PRIMARY KEY,
-  salon_id    TEXT REFERENCES salons(slug) ON DELETE SET NULL,
-  phone       TEXT NOT NULL,
-  role        TEXT,
-  step        TEXT,
-  state       TEXT,
-  expires_at  TEXT,
-  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  salon_id    TEXT,
+  post_id     TEXT,
+  event       TEXT NOT NULL,
+  source      TEXT,
+  data        TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ===== Manager Tokens (magic links) =====
+CREATE TABLE IF NOT EXISTS manager_tokens (
+  id           TEXT PRIMARY KEY,
+  manager_id   TEXT NOT NULL REFERENCES managers(id) ON DELETE CASCADE,
+  token        TEXT NOT NULL UNIQUE,
+  expires_at   TEXT NOT NULL,
+  used_at      TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS stylist_portal_tokens (
+  id           TEXT PRIMARY KEY,
+  post_id      TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+  stylist_phone TEXT,
+  token        TEXT NOT NULL,
+  expires_at   TEXT NOT NULL,
+  used_at      TEXT
 );
 
 -- ===== Media Cache =====
