@@ -24,6 +24,7 @@ import { db } from "./db.js";
 // Ensure new manager columns exist
 try { db.prepare("ALTER TABLE managers ADD COLUMN email TEXT UNIQUE").run(); } catch {}
 try { db.prepare("ALTER TABLE managers ADD COLUMN password_hash TEXT").run(); } catch {}
+try { db.prepare("ALTER TABLE posts ADD COLUMN updated_at TEXT").run(); } catch {}
 
 // =====================================================
 // Load salons BEFORE routes
