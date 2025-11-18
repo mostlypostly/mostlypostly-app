@@ -15,23 +15,47 @@ db.prepare(`
 `).run();
 
 // --- Issue & verify token ---
-export function issueManagerToken(salon_id, manager_phone) {
+function issueManagerToken(salon_id, manager_phone, manager_id) {
   const token = crypto.randomBytes(16).toString("hex");
   const expires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
   try {
-    const insert = db.prepare(`
-      INSERT OR REPLACE INTO manager_tokens (token, salon_id, manager_phone, expires_at)
-      VALUES (?, ?, ?, ?)
-    `);
-    insert.run(token, salon_id || "unknown", manager_phone || "unknown", expires);
+    // Detect whether manager_tokens has a manager_id column
+    const cols = db.prepare("PRAGMA table_info(manager_tokens)").all();
+    const hasManagerId = cols.some((c) => c.name === "manager_id");
+
+    let insert;
+
+    if (hasManagerId) {
+      // Newer schema: token tied to a specific manager_id (NOT NULL)
+      insert = db.prepare(`
+        INSERT OR REPLACE INTO manager_tokens (token, salon_id, manager_phone, manager_id, expires_at)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+      insert.run(
+        token,
+        salon_id || "unknown",
+        manager_phone || "unknown",
+        manager_id,                     // MUST be non-null in your current DB
+        expires
+      );
+    } else {
+      // Legacy schema: no manager_id column
+      insert = db.prepare(`
+        INSERT OR REPLACE INTO manager_tokens (token, salon_id, manager_phone, expires_at)
+        VALUES (?, ?, ?, ?)
+      `);
+      insert.run(token, salon_id || "unknown", manager_phone || "unknown", expires);
+    }
 
     // ✅ Verify on the same connection
     const verify = verifyTokenRow(token);
     if (verify && verify.token === token) {
       console.log("✅ Token verified and visible immediately:", verify);
     } else {
-      console.warn("⚠️ Token not visible immediately (should not happen with Better-SQLite3).");
+      console.warn(
+        "⚠️ Token not visible immediately (should not happen with Better-SQLite3)."
+      );
     }
 
     return token;
@@ -40,6 +64,7 @@ export function issueManagerToken(salon_id, manager_phone) {
     return null;
   }
 }
+
 
 import { publishToFacebook } from "../publishers/facebook.js";
 import { publishToInstagram } from "../publishers/instagram.js";
@@ -745,8 +770,9 @@ export async function handleIncomingMessage({
           (salon?.salon_name?.toLowerCase().replace(/\s+/g, "")) ||
           "unknown";
 
-          const token = await issueManagerToken(salonKey, manager.phone);
+          const token = await issueManagerToken(salonKey, manager.phone, manager?.id);
           console.log("🔑 Manager token created:", token);
+
 
           const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
           const managerLink = `${BASE_URL}/manager/login?token=${token}`;
