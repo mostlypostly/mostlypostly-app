@@ -15,49 +15,68 @@ db.prepare(`
 `).run();
 
 // --- Issue & verify token ---
-function issueManagerToken(salon_id, manager_phone, manager_id) {
+// --- Issue & verify token ---
+// salonSlug should match managers.salon_id (e.g. 'rejuve-salon-spa')
+function issueManagerToken(salonSlug, managerPhone) {
   const token = crypto.randomBytes(16).toString("hex");
   const expires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
   try {
-    // Detect schema
+    // Detect schema for backwards compatibility
     const cols = db.prepare("PRAGMA table_info(manager_tokens)").all();
     const hasManagerId = cols.some(c => c.name === "manager_id");
 
     if (hasManagerId) {
-      if (!manager_id) {
-        throw new Error("manager_id is REQUIRED by schema but was null/undefined");
+      // 🔍 Find the real manager row in the DB
+      let mgrRow = null;
+
+      if (salonSlug) {
+        mgrRow = db.prepare(
+          "SELECT id FROM managers WHERE phone = ? AND salon_id = ? LIMIT 1"
+        ).get(managerPhone, salonSlug);
+      } else {
+        mgrRow = db.prepare(
+          "SELECT id FROM managers WHERE phone = ? LIMIT 1"
+        ).get(managerPhone);
       }
 
-      db.prepare(`
-        INSERT INTO manager_tokens (token, salon_id, manager_phone, manager_id, expires_at)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(token, salon_id, manager_phone, manager_id, expires);
+      if (!mgrRow) {
+        throw new Error(
+          `No manager row found for phone=${managerPhone || "null"} salon=${salonSlug || "null"}`
+        );
+      }
 
+      // Insert token tied to the actual manager_id
+      db.prepare(`
+        INSERT INTO manager_tokens (id, manager_id, token, expires_at, salon_id, manager_phone)
+        VALUES (lower(hex(randomblob(16))), ?, ?, ?, ?, ?)
+      `).run(
+        mgrRow.id,
+        token,
+        expires,
+        salonSlug || null,
+        managerPhone || null
+      );
     } else {
+      // Legacy schema without manager_id
       db.prepare(`
         INSERT INTO manager_tokens (token, salon_id, manager_phone, expires_at)
         VALUES (?, ?, ?, ?)
-      `).run(token, salon_id, manager_phone, expires);
+      `).run(token, salonSlug || null, managerPhone || null, expires);
     }
 
-    const verify = db.prepare(`
-      SELECT * FROM manager_tokens WHERE token = ?
-    `).get(token);
+    const verify = db.prepare(
+      "SELECT id, manager_id, token, expires_at, salon_id, manager_phone FROM manager_tokens WHERE token = ?"
+    ).get(token);
 
-    if (!verify) {
-      console.warn("⚠️ Token inserted but not found!");
-    } else {
-      console.log("🔑 Token stored:", verify);
-    }
-
+    console.log("🔑 Token stored row:", verify);
     return token;
-
   } catch (err) {
     console.error("❌ Failed to insert or verify token:", err.message);
     return null;
   }
 }
+
 
 
 import { publishToFacebook } from "../publishers/facebook.js";
@@ -761,11 +780,13 @@ export async function handleIncomingMessage({
           salon?.salon_id ||
           salon?.id ||
           salon?.salon_info?.id ||
+          (salon?.salon_info?.slug) ||
           (salon?.salon_name?.toLowerCase().replace(/\s+/g, "")) ||
           "unknown";
 
-          const token = issueManagerToken(salonKey, manager.phone, manager.id);
-          console.log("🔑 Manager token created:", token);
+        const token = issueManagerToken(salonKey, manager.phone);
+        console.log("🔑 Manager token created:", token);
+
 
 
           const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
