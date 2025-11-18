@@ -1,6 +1,6 @@
 import express from "express";
 import bcrypt from "bcryptjs";
-import { db } from "../db.js";
+import { db } from "../../db.js";
 import dayjs from "dayjs";
 
 const router = express.Router();
