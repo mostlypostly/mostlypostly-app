@@ -3,7 +3,15 @@ import bcrypt from "bcryptjs";
 import { db } from "../../db.js";
 import dayjs from "dayjs";
 
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
+
 const router = express.Router();
+
+// Resolve project root so we can send the HTML file
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const ROOT_DIR = join(__dirname, "..", "..");
 
 /* -------------------------------
    Utility: Check columns
@@ -17,8 +25,10 @@ function managerTableHas(columnName) {
    GET: Login Page
 ---------------------------------*/
 router.get("/login", (req, res) => {
-  return res.sendFile("public/manager-login.html", { root: process.cwd() });
+  const loginPath = join(ROOT_DIR, "public", "manager-login.html");
+  return res.sendFile(loginPath);
 });
+
 
 /* -------------------------------
    POST: Login Submit

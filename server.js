@@ -70,11 +70,16 @@ import facebookAuthRoutes from "./src/routes/facebookAuth.js";
 // Scheduler
 import { enqueuePost, runSchedulerOnce, startScheduler } from "./src/scheduler.js";
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // =====================================================
 // 🚀 Initialize Express app — MUST happen BEFORE app.use()
 // =====================================================
 const app = express();
+
+// Static files for login, logos, etc.
+app.use("/public", express.static(path.join(__dirname, "public")));
 
 app.use(
   session({
