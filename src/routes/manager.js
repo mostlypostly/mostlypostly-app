@@ -164,28 +164,48 @@ function managerFromRow(row) {
 }
 
 // ───────────────────────────────────────────────────────────
-// Auth middleware
-// ───────────────────────────────────────────────────────────
-// ───────────────────────────────────────────────────────────
-// Auth middleware (enhanced with manager name + role)
+// Auth middleware (session-aware + token fallback)
 // ───────────────────────────────────────────────────────────
 async function requireAuth(req, res, next) {
-  const token = req.cookies?.mgr_token || req.query?.token;
-  if (!token) {
-    return res
-      .status(401)
-      .send(
-        pageShell({
-          title: "Manager — Not Authenticated",
-          body: `<div class="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-                   <h1 class="text-xl font-semibold text-blue-400 mb-2">Invalid Session</h1>
-                   <p class="text-zinc-300">Missing token. Use the SMS link or ask your system admin to issue a new manager link.</p>
-                 </div>`,
-        })
-      );
-  }
-
   try {
+    // 1️⃣ SESSION-BASED LOGIN (email/password or magic link via managerAuth.js)
+    if (req.session?.manager_id) {
+      const mgr = db
+        .prepare(`SELECT * FROM managers WHERE id = ?`)
+        .get(req.session.manager_id);
+
+      if (mgr) {
+        req.manager = {
+          salon_id: mgr.salon_id || "unknown",
+          manager_phone: mgr.phone || "",
+          manager_name: mgr.name || "Manager",
+          manager_role: mgr.role || "Manager",
+          token: null,
+        };
+
+        return next(); // ✅ we’re authenticated via session
+      } else {
+        // Stale session: clear it and fall through to token logic
+        req.session.manager_id = null;
+      }
+    }
+
+    // 2️⃣ TOKEN-BASED LOGIN (old flow via SMS magic link)
+    const token = req.cookies?.mgr_token || req.query?.token;
+    if (!token) {
+      return res
+        .status(401)
+        .send(
+          pageShell({
+            title: "Manager — Not Authenticated",
+            body: `<div class="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
+                     <h1 class="text-xl font-semibold text-blue-400 mb-2">Invalid Session</h1>
+                     <p class="text-zinc-300">Missing token or session. Use the SMS link, log in with your email and password, or ask your system admin to issue a new manager link.</p>
+                   </div>`,
+          })
+        );
+    }
+
     const row = db
       .prepare(
         `SELECT token, salon_id, manager_phone, expires_at
@@ -222,7 +242,7 @@ async function requireAuth(req, res, next) {
         );
     }
 
-    // 🔍 Pull manager info from salon file
+    // 🔍 Pull manager info from salon file (for name/role display)
     const salonPolicy = getSalonPolicy(row.salon_id);
     const foundManager =
       salonPolicy?.managers?.find((m) => m.phone === row.manager_phone) || {};
@@ -236,7 +256,7 @@ async function requireAuth(req, res, next) {
       token: row.token,
     };
 
-    // keep cookies fresh
+    // Optional: keep cookies fresh for token-based flow
     res.cookie("mgr_token", row.token, {
       httpOnly: false,
       sameSite: "Lax",
@@ -263,11 +283,21 @@ async function requireAuth(req, res, next) {
   }
 }
 
+
 // ==========================================================
 // 🧹 Manager Logout — clears cookies & redirects
 // ==========================================================
 router.get("/logout", (req, res) => {
   try {
+    // Destroy session if it exists
+    if (req.session) {
+      req.session.destroy((err) => {
+        if (err) {
+          console.warn("⚠️ Session destroy error:", err.message);
+        }
+      });
+    }
+
     // Remove all authentication and tenant cookies
     res.clearCookie("mgr_token", { path: "/" });
     res.clearCookie("mt", { path: "/" });
@@ -275,13 +305,14 @@ router.get("/logout", (req, res) => {
 
     console.log("👋 Manager logged out successfully.");
 
-    // Redirect to manager landing or login page
-    res.redirect("/manager");
+    // Redirect to explicit login page
+    res.redirect("/manager/login");
   } catch (err) {
     console.error("❌ Logout error:", err);
     res.status(500).send("Logout failed. Please close your browser window.");
   }
 });
+
 
 // ───────────────────────────────────────────────────────────
 // Routes
