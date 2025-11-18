@@ -20,45 +20,39 @@ function issueManagerToken(salon_id, manager_phone, manager_id) {
   const expires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
   try {
-    // Detect whether manager_tokens has a manager_id column
+    // Detect schema
     const cols = db.prepare("PRAGMA table_info(manager_tokens)").all();
-    const hasManagerId = cols.some((c) => c.name === "manager_id");
-
-    let insert;
+    const hasManagerId = cols.some(c => c.name === "manager_id");
 
     if (hasManagerId) {
-      // Newer schema: token tied to a specific manager_id (NOT NULL)
-      insert = db.prepare(`
-        INSERT OR REPLACE INTO manager_tokens (token, salon_id, manager_phone, manager_id, expires_at)
+      if (!manager_id) {
+        throw new Error("manager_id is REQUIRED by schema but was null/undefined");
+      }
+
+      db.prepare(`
+        INSERT INTO manager_tokens (token, salon_id, manager_phone, manager_id, expires_at)
         VALUES (?, ?, ?, ?, ?)
-      `);
-      insert.run(
-        token,
-        salon_id || "unknown",
-        manager_phone || "unknown",
-        manager_id,                     // MUST be non-null in your current DB
-        expires
-      );
+      `).run(token, salon_id, manager_phone, manager_id, expires);
+
     } else {
-      // Legacy schema: no manager_id column
-      insert = db.prepare(`
-        INSERT OR REPLACE INTO manager_tokens (token, salon_id, manager_phone, expires_at)
+      db.prepare(`
+        INSERT INTO manager_tokens (token, salon_id, manager_phone, expires_at)
         VALUES (?, ?, ?, ?)
-      `);
-      insert.run(token, salon_id || "unknown", manager_phone || "unknown", expires);
+      `).run(token, salon_id, manager_phone, expires);
     }
 
-    // ✅ Verify on the same connection
-    const verify = verifyTokenRow(token);
-    if (verify && verify.token === token) {
-      console.log("✅ Token verified and visible immediately:", verify);
+    const verify = db.prepare(`
+      SELECT * FROM manager_tokens WHERE token = ?
+    `).get(token);
+
+    if (!verify) {
+      console.warn("⚠️ Token inserted but not found!");
     } else {
-      console.warn(
-        "⚠️ Token not visible immediately (should not happen with Better-SQLite3)."
-      );
+      console.log("🔑 Token stored:", verify);
     }
 
     return token;
+
   } catch (err) {
     console.error("❌ Failed to insert or verify token:", err.message);
     return null;
@@ -770,7 +764,7 @@ export async function handleIncomingMessage({
           (salon?.salon_name?.toLowerCase().replace(/\s+/g, "")) ||
           "unknown";
 
-          const token = await issueManagerToken(salonKey, manager.phone, manager?.id);
+          const token = issueManagerToken(salonKey, manager.phone, manager.id);
           console.log("🔑 Manager token created:", token);
 
 
