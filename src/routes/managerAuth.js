@@ -1,56 +1,105 @@
 import express from "express";
 import bcrypt from "bcryptjs";
-import { db } from "../../db.js";
+import { db } from "../db.js";
+import dayjs from "dayjs";
 
 const router = express.Router();
 
-// Render login page
-router.get("/login", (req, res) => {
-  return res.send(`
-    <!DOCTYPE html>
-    <html class="bg-slate-950 text-slate-50">
-    <head>
-      <meta charset="utf-8" />
-      <title>Manager Login — MostlyPostly</title>
-      <script src="https://cdn.tailwindcss.com"></script>
-    </head>
-    <body class="min-h-screen flex items-center justify-center">
-      <form method="POST" class="bg-slate-900 p-8 rounded-xl border border-slate-800 w-96">
-        <h1 class="text-xl font-bold mb-4">Manager Login</h1>
-        <input name="email" type="email" placeholder="Email" class="w-full p-3 rounded bg-slate-800 border border-slate-700 mb-3"/>
-        <input name="password" type="password" placeholder="Password" class="w-full p-3 rounded bg-slate-800 border border-slate-700 mb-4"/>
+/* -------------------------------
+   Utility: Check columns
+---------------------------------*/
+function managerTableHas(columnName) {
+  const cols = db.prepare("PRAGMA table_info(managers)").all();
+  return cols.some(c => c.name === columnName);
+}
 
-        <button class="w-full bg-blue-600 hover:bg-blue-700 text-white p-3 rounded-lg font-medium">
-          Sign In
-        </button>
-      </form>
-    </body>
-    </html>
-  `);
+/* -------------------------------
+   GET: Login Page
+---------------------------------*/
+router.get("/login", (req, res) => {
+  return res.sendFile("public/manager-login.html", { root: process.cwd() });
 });
 
-// Handle POST login
+/* -------------------------------
+   POST: Login Submit
+---------------------------------*/
 router.post("/login", (req, res) => {
   const { email, password } = req.body;
 
-  const mgr = db.prepare(
-    `SELECT * FROM managers WHERE email=?`
-  ).get(email);
+  if (!managerTableHas("email") || !managerTableHas("password_hash")) {
+    return res.send(`
+      <h2>Email login not available yet</h2>
+      <p>Your account has not been upgraded for password login.</p>
+      <a href="/manager/login">Back</a>
+    `);
+  }
 
+  const mgr = db.prepare(`SELECT * FROM managers WHERE email=?`).get(email);
   if (!mgr) return res.send("Invalid login");
 
   const ok = bcrypt.compareSync(password, mgr.password_hash);
   if (!ok) return res.send("Invalid password");
 
-  // Save session
   req.session.manager_id = mgr.id;
   return res.redirect("/manager");
 });
 
-router.get("/logout", (req, res) => {
-  req.session.destroy(() => {
-    res.redirect("/manager/login");
-  });
+/* -------------------------------
+   GET: Signup Page
+---------------------------------*/
+router.get("/signup", (req, res) => {
+  return res.sendFile("public/manager-signup.html", { root: process.cwd() });
+});
+
+/* -------------------------------
+   POST: Signup Submit
+---------------------------------*/
+router.post("/signup", (req, res) => {
+  const { name, email, phone, password } = req.body;
+
+  if (!managerTableHas("email") || !managerTableHas("password_hash")) {
+    return res.send("Signup unavailable: database missing email/password columns.");
+  }
+
+  // Hash password
+  const hash = bcrypt.hashSync(password, 10);
+
+  // Insert manager
+  db.prepare(`
+    INSERT INTO managers (id, name, phone, email, password_hash, salon_id)
+    VALUES (
+      lower(hex(randomblob(16))),
+      ?, ?, ?, ?, ?
+    )
+  `).run(name, phone, email, hash, "rejuve-salon-spa");  // TODO: dynamic salon assignment
+
+  return res.redirect("/manager/login");
+});
+
+/* -------------------------------
+   GET: Forgot Password (placeholder)
+---------------------------------*/
+router.get("/forgot-password", (req, res) => {
+  return res.send(`
+    <h2>Password Reset Coming Soon</h2>
+    <p>We will send reset instructions once email delivery is configured.</p>
+    <a href="/manager/login">Back to login</a>
+  `);
+});
+
+/* -------------------------------
+   Magic token login (unchanged)
+---------------------------------*/
+router.get("/login-with-token", (req, res) => {
+  const token = req.query.token;
+  const row = db.prepare(
+    "SELECT * FROM manager_tokens WHERE token=?"
+  ).get(token);
+
+  if (!row) return res.send("Invalid or expired login link");
+
+  req.session.manager_id = row.manager_id;
+  return res.redirect("/manager");
 });
 
 export default router;

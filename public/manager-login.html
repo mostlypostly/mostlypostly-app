@@ -1,0 +1,91 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
+<html>
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta http-equiv="Content-Style-Type" content="text/css">
+  <title></title>
+  <meta name="Generator" content="Cocoa HTML Writer">
+  <meta name="CocoaVersion" content="2685.1">
+  <style type="text/css">
+    p.p1 {margin: 0.0px 0.0px 0.0px 0.0px; font: 12.0px Helvetica}
+    p.p2 {margin: 0.0px 0.0px 0.0px 0.0px; font: 12.0px Helvetica; min-height: 14.0px}
+  </style>
+</head>
+<body>
+<p class="p1">&lt;!DOCTYPE html&gt;</p>
+<p class="p1">&lt;html lang="en"&gt;</p>
+<p class="p1">&lt;head&gt;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;meta charset="UTF-8" /&gt;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;title&gt;Manager Login — MostlyPostly&lt;/title&gt;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;meta name="viewport" content="width=device-width, initial-scale=1" /&gt;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet"&gt;</p>
+<p class="p2"><br></p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;style&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>body {</p>
+<p class="p1"><span class="Apple-converted-space">      </span>background: #0B1223;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>}</p>
+<p class="p1"><span class="Apple-converted-space">    </span>.card {</p>
+<p class="p1"><span class="Apple-converted-space">      </span>background: #111827;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>border: 1px solid rgba(255,255,255,0.05);</p>
+<p class="p1"><span class="Apple-converted-space">      </span>border-radius: 12px;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>padding: 32px;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>}</p>
+<p class="p1"><span class="Apple-converted-space">    </span>.mp-logo {</p>
+<p class="p1"><span class="Apple-converted-space">      </span>width: 52px;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>margin: 0 auto 12px;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>display: block;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>}</p>
+<p class="p1"><span class="Apple-converted-space">    </span>.footer-text {</p>
+<p class="p1"><span class="Apple-converted-space">      </span>font-size: 12px;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>color: #8892a6;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>}</p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;/style&gt;</p>
+<p class="p1">&lt;/head&gt;</p>
+<p class="p2"><br></p>
+<p class="p1">&lt;body class="text-gray-200"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;div class="min-h-screen flex flex-col justify-center items-center px-4"&gt;</p>
+<p class="p2"><br></p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;img src="/public/mp-logo.svg" class="mp-logo" alt="MostlyPostly Logo" /&gt;</p>
+<p class="p2"><br></p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;div class="card w-full max-w-md mt-4"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;h2 class="text-center text-3xl font-bold mb-6"&gt;Sign In&lt;/h2&gt;</p>
+<p class="p2"><br></p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;!-- LOGIN FORM --&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;form method="POST" action="/manager/login"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">        </span>&lt;label class="block mb-3"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">          </span>&lt;span class="text-gray-300 text-sm"&gt;Email Address&lt;/span&gt;</p>
+<p class="p1"><span class="Apple-converted-space">          </span>&lt;input type="email" name="email" required</p>
+<p class="p1"><span class="Apple-converted-space">                 </span>class="mt-1 w-full p-3 rounded bg-gray-800 border border-gray-700 text-gray-200 focus:ring focus:ring-blue-500" /&gt;</p>
+<p class="p1"><span class="Apple-converted-space">        </span>&lt;/label&gt;</p>
+<p class="p2"><br></p>
+<p class="p1"><span class="Apple-converted-space">        </span>&lt;label class="block mb-4"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">          </span>&lt;span class="text-gray-300 text-sm"&gt;Password&lt;/span&gt;</p>
+<p class="p1"><span class="Apple-converted-space">          </span>&lt;input type="password" name="password" required</p>
+<p class="p1"><span class="Apple-converted-space">                 </span>class="mt-1 w-full p-3 rounded bg-gray-800 border border-gray-700 text-gray-200 focus:ring focus:ring-blue-500" /&gt;</p>
+<p class="p1"><span class="Apple-converted-space">        </span>&lt;/label&gt;</p>
+<p class="p2"><br></p>
+<p class="p1"><span class="Apple-converted-space">        </span>&lt;button type="submit"</p>
+<p class="p1"><span class="Apple-converted-space">          </span>class="w-full py-3 bg-blue-600 hover:bg-blue-700 rounded text-white font-semibold transition"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">          </span>Sign In</p>
+<p class="p1"><span class="Apple-converted-space">        </span>&lt;/button&gt;</p>
+<p class="p2"><br></p>
+<p class="p1"><span class="Apple-converted-space">        </span>&lt;div class="flex justify-between text-sm mt-3"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">          </span>&lt;a href="/manager/forgot-password" class="text-blue-400 hover:underline"&gt;Forgot password?&lt;/a&gt;</p>
+<p class="p1"><span class="Apple-converted-space">          </span>&lt;a href="/manager/signup" class="text-blue-400 hover:underline"&gt;Create Account&lt;/a&gt;</p>
+<p class="p1"><span class="Apple-converted-space">        </span>&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;/form&gt;</p>
+<p class="p2"><br></p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;div class="mt-6 text-center footer-text"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">        </span>By continuing, you agree to our</p>
+<p class="p1"><span class="Apple-converted-space">        </span>&lt;a href="/legal/terms" class="text-blue-400 hover:underline"&gt;Terms of Service&lt;/a&gt;</p>
+<p class="p1"><span class="Apple-converted-space">        </span>and</p>
+<p class="p1"><span class="Apple-converted-space">        </span>&lt;a href="/legal/privacy" class="text-blue-400 hover:underline"&gt;Privacy Policy&lt;/a&gt;.</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;/div&gt;</p>
+<p class="p2"><br></p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;/div&gt;</p>
+<p class="p2"><br></p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;/div&gt;</p>
+<p class="p1">&lt;/body&gt;</p>
+<p class="p1">&lt;/html&gt;</p>
+</body>
+</html>

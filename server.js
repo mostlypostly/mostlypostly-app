@@ -10,6 +10,7 @@ import fetch from "node-fetch";
 import http from "http";
 import { Server } from "socket.io";
 import express from "express";
+import session from "express-session";
 import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
@@ -69,10 +70,24 @@ import facebookAuthRoutes from "./src/routes/facebookAuth.js";
 // Scheduler
 import { enqueuePost, runSchedulerOnce, startScheduler } from "./src/scheduler.js";
 
+
 // =====================================================
 // 🚀 Initialize Express app — MUST happen BEFORE app.use()
 // =====================================================
 const app = express();
+
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || "supersecretkey",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: false, // set to true on production with HTTPS
+      maxAge: 1000 * 60 * 60 * 24 * 7 // 7 days
+    }
+  })
+);
 
 // =====================================================
 // 🧩 Global Middleware (order matters)
