@@ -55,29 +55,28 @@ try {
 //    (safe + idempotent, ignore duplicate-column errors)
 // =====================================================
 
-// posts.updated_at
 try {
   db.prepare('ALTER TABLE posts ADD COLUMN updated_at TEXT').run();
   console.log("🧱 (db.js) ensured posts.updated_at exists");
 } catch (e) {
-  // ignore if table/column already exists
+  console.warn("⚠️ posts.updated_at migration error:", e.message);
 }
 
-// managers.email
-try {
-  db.prepare('ALTER TABLE managers ADD COLUMN email TEXT UNIQUE').run();
-  console.log("🧱 (db.js) ensured managers.email exists");
-} catch (e) {
-  // ignore if table/column already exists
-}
-
-// managers.password_hash
 try {
   db.prepare('ALTER TABLE managers ADD COLUMN password_hash TEXT').run();
   console.log("🧱 (db.js) ensured managers.password_hash exists");
 } catch (e) {
-  // ignore if table/column already exists
+  console.warn("⚠️ managers.password_hash migration error:", e.message);
 }
+
+// managers.email
+try {
+  db.prepare('ALTER TABLE managers ADD COLUMN email TEXT').run();
+  console.log("🧱 (db.js) ensured managers.email exists");
+} catch (e) {
+  console.warn("⚠️ managers.email migration error:", e.message);
+}
+
 
 // =====================================================
 // 3) Recommended PRAGMAs
